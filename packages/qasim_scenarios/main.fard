@@ -1,0 +1,71 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/hash") as hash
+import("std/json") as json
+
+fn shock_for(instrument, shock_spec) {
+  if rec.has(shock_spec, instrument) then rec.get(shock_spec, instrument)
+  else if rec.has(shock_spec, "_default") then rec.get(shock_spec, "_default")
+  else 0
+}
+
+fn shocked_positions(positions, shock_spec) {
+  list.map(positions, fn(p) {
+    let shock = shock_for(p.instrument, shock_spec)
+    let shocked_price = if p.price == null then null else p.price * (1 + shock)
+    let shocked_value = if shocked_price == null then null else p.qty * shocked_price
+    {
+      instrument: p.instrument,
+      qty: p.qty,
+      shock: shock,
+      base_price: p.price,
+      shocked_price: shocked_price,
+      base_value: p.value,
+      shocked_value: shocked_value,
+      pnl: if p.value == null || shocked_value == null then null else shocked_value - p.value
+    }
+  })
+}
+
+fn scenario_nav_of(shocked_positions) {
+  list.fold(shocked_positions, 0, fn(acc, p) {
+    if p.shocked_value == null then acc else acc + p.shocked_value
+  })
+}
+
+fn scenario_pnl_of(shocked_positions) {
+  list.fold(shocked_positions, 0, fn(acc, p) {
+    if p.pnl == null then acc else acc + p.pnl
+  })
+}
+
+fn scenario_state_of(account, as_of_ts, positions, shock_spec, name) {
+  let shocked = shocked_positions(positions, shock_spec)
+  let shocked_nav = scenario_nav_of(shocked)
+  let pnl = scenario_pnl_of(shocked)
+  let payload = {
+    account: account,
+    as_of_ts: as_of_ts,
+    scenario: name,
+    shock_spec: shock_spec,
+    shocked_positions: shocked,
+    shocked_nav: shocked_nav,
+    pnl: pnl
+  }
+  {
+    scenario: name,
+    shock_spec: shock_spec,
+    shocked_positions: shocked,
+    shocked_nav: shocked_nav,
+    pnl: pnl,
+    scenario_digest: hash.sha256_text(json.encode(payload))
+  }
+}
+
+{
+  shock_for: shock_for,
+  shocked_positions: shocked_positions,
+  scenario_nav_of: scenario_nav_of,
+  scenario_pnl_of: scenario_pnl_of,
+  scenario_state_of: scenario_state_of
+}

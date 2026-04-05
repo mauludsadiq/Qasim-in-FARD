@@ -230,6 +230,37 @@ GET /finance/export/ACCT-123
 
 ### Scenario Engine (NEW)
 
+### Instrument-Level Shock Maps (NEW)
+
+Qasim scenarios now support per-instrument shock specifications.
+
+Endpoint:
+
+- GET /finance/scenario_at/<account>/<ts_unix>/<shock_spec>
+
+Example:
+
+- /finance/scenario_at/ACCT-123/1731000125/AAPL:-0.2
+
+Shock map semantics:
+
+- explicit instrument shocks are applied by symbol
+- unspecified instruments fall back to _default = 0
+
+Returned scenario state includes:
+
+- shock_spec
+- shocked_positions
+- shocked_nav
+- pnl
+- scenario_digest
+
+This upgrades Qasim from uniform scalar shocks to deterministic instrument-level scenario transforms.
+
+---
+
+### Scenario Engine (NEW)
+
 Qasim now supports deterministic forward scenario evaluation.
 
 Endpoint:

@@ -13,6 +13,7 @@ import("std/http")   as http
 import("./packages/qasim_prices/main") as qasim_prices
 import("./packages/qasim_state/main") as qasim_state
 import("./packages/qasim_http/main") as qasim_http
+import("./packages/qasim_scenarios/main") as qasim_scenarios
 
 let DB_PATH = "/tmp/qasim_fard.db"
 let MAX_PRICE_AGE = 300
@@ -422,9 +423,10 @@ fn handle(req) {
   else if req.path == "/finance/live/price" then post_live_price(req)
   else if req.path == "/finance/replay" then qasim_http.replay(req, qasim_state, ok_json)
   else if str.starts_with(req.path, "/finance/price/aggregate/") then qasim_http.price_aggregate(req, db, qasim_prices, ok_json)
-  else if str.starts_with(req.path, "/finance/export_at/") then qasim_http.export_account_at(req, db, qasim_prices, qasim_state, ok_json, err_json)
+  else if str.starts_with(req.path, "/finance/export_at/") then qasim_http.export_account_at(req, db, qasim_prices, qasim_state, MAX_PRICE_AGE, ok_json, err_json)
   else if str.starts_with(req.path, "/finance/export/") then qasim_http.export_account(req, db, qasim_prices, qasim_state, ok_json)
-  else if str.starts_with(req.path, "/finance/state_at/") then qasim_http.state_at(req, db, qasim_prices, qasim_state, ok_json, err_json)
+  else if str.starts_with(req.path, "/finance/scenario_at/") then qasim_http.scenario_at(req, db, qasim_prices, qasim_state, qasim_scenarios, MAX_PRICE_AGE, ok_json, err_json)
+  else if str.starts_with(req.path, "/finance/state_at/") then qasim_http.state_at(req, db, qasim_prices, qasim_state, MAX_PRICE_AGE, ok_json, err_json)
   else if str.starts_with(req.path, "/finance/position/") then qasim_http.get_position(req, db, qasim_prices, qasim_state, ok_json)
   else { status: 404, headers: {}, body: "not found" } in
   let req_payload = json.canonicalize({ path: req.path, body: req.body }) in
