@@ -263,3 +263,70 @@ Qasim follows FARD principles:
 This is not an API.
 
 This is a verifiable financial system.
+
+---
+
+## Time-Indexed State (NEW)
+
+Qasim now supports deterministic state evaluation at any time t.
+
+### Endpoint
+
+GET /finance/state_at/<account>/<ts_unix>
+
+### Behavior
+
+State is computed using only data ≤ t:
+
+- tx where ts_unix ≤ t
+- price_claims where ts_unix ≤ t
+
+No forward-looking data is ever used.
+
+### Properties
+
+- Time-consistent valuation
+- No lookahead bias
+- Missing prices remain null (no implicit fill)
+- State digest includes as_of_ts
+
+### Example
+
+Before price arrival:
+
+qty = 10
+price = null
+nav = 0
+
+After price + second tx:
+
+qty = 6
+price = 171
+nav = 1026
+
+### Export at time
+
+GET /finance/export_at/<account>/<ts_unix>
+
+Returns full replayable state at time t.
+
+### Replay with time
+
+POST /finance/replay
+
+Optional field:
+
+as_of_ts
+
+This constrains replay to historical cutoff.
+
+### Guarantee
+
+State is a pure function:
+
+state(t) = f(tx≤t, price≤t)
+
+Digest changes with time.
+
+---
+
