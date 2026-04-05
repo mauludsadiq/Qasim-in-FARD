@@ -8,6 +8,7 @@ import("std/hash")   as hash
 import("std/bytes")  as bytes
 import("std/base64") as b64
 import("std/crypto") as crypto
+import("./packages/qasim_crypto/main") as qasim_crypto
 import("std/http")   as http
 import("./packages/qasim_prices/main") as qasim_prices
 import("./packages/qasim_state/main") as qasim_state
@@ -436,6 +437,8 @@ fn handle(req) {
   let prev_chain = if rec.has(prev_hit, "some") then prev_hit.some.chain_digest else "GENESIS" in
   let chain_payload = json.canonicalize({ prev_chain_digest: prev_chain, request_digest: req_digest, response_digest: res_digest, state_digest: state_digest }) in
   let chain_digest = hash.sha256_text(chain_payload) in
+  let chain_sig = qasim_crypto.chain_sign("1111111111111111111111111111111111111111111111111111111111111111", chain_digest) in
+  let chain_pk  = qasim_crypto.signer_id("1111111111111111111111111111111111111111111111111111111111111111") in
   let _ = sqlite.exec(db, str.concat([
     "INSERT INTO receipt_log (req_digest,res_digest,state_digest,chain_digest,payload_json) VALUES ('",
     req_digest, "'", ", '",
@@ -446,7 +449,7 @@ fn handle(req) {
   ])) in
   {
     status: res.status,
-    headers: rec.set(rec.set(rec.set(res.headers, "X-Qasim-Request-Digest", req_digest), "X-Qasim-Response-Digest", res_digest), "X-Qasim-Chain-Digest", chain_digest),
+    headers: rec.set(rec.set(rec.set(rec.set(rec.set(res.headers, "X-Qasim-Request-Digest", req_digest), "X-Qasim-Response-Digest", res_digest), "X-Qasim-Chain-Digest", chain_digest), "X-Qasim-Chain-Signature", chain_sig), "X-Qasim-Chain-Public-Key", chain_pk),
     body: res.body
   }
 }

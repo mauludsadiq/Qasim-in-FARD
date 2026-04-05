@@ -1,0 +1,16 @@
+import("std/crypto") as crypto
+import("std/bytes") as bytes
+
+fn chain_sign(secret_key_hex, msg_text) {
+  let msg_hex = bytes.to_hex(bytes.of_str(msg_text))
+  crypto.ed25519_sign(secret_key_hex, msg_hex)
+}
+
+fn signer_id(secret_key_hex) {
+  crypto.ed25519_public_key(secret_key_hex)
+}
+
+{
+  chain_sign: chain_sign,
+  signer_id: signer_id
+}

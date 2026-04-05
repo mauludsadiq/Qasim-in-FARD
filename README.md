@@ -230,6 +230,22 @@ GET /finance/export/ACCT-123
 
 ### Append-Only Receipt Chain (NEW)
 
+### Ed25519 Chain Signing (NEW)
+
+Qasim now signs the live chain head with Ed25519 and exposes both the signature and public key over HTTP.
+
+Headers:
+
+- X-Qasim-Chain-Digest
+- X-Qasim-Chain-Public-Key
+- X-Qasim-Chain-Signature
+
+This allows any client to verify that the chain head was produced by the holder of the corresponding Ed25519 secret key.
+
+---
+
+### Append-Only Receipt Chain (NEW)
+
 Qasim now persists an append-only receipt log for HTTP interactions.
 
 For each request, Qasim records:
