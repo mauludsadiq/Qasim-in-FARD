@@ -111,6 +111,22 @@ fn parse_shock_map(shock_text) {
   })
 }
 
+fn state_payload_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
+  let prefix = "/finance/state_payload/"
+  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let parts = str.split(rest, "/")
+  let account = if list.len(parts) > 0 then parts[0] else ""
+  let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
+  if account == "" then err_json(400, "missing account")
+  else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
+  else
+    let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
+    let txs = tx_rows_for_account_at(db, account, cutoff) in
+    let prices = prices_mod.price_rows_at(db, cutoff, max_price_age) in
+    let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
+    ok_json(state_mod.state_payload_from_rows(account, txs, prices, positions, cutoff))
+}
+
 fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/scenario_at/"
   let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
@@ -122,7 +138,7 @@ fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_j
   else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
   else
     let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
-    let shock = parse_shock_map(shock_text) in
+    let shock = if str.contains(shock_text, ":") then parse_shock_map(shock_text) else { scenario_name: shock_text } in
     let txs = tx_rows_for_account_at(db, account, cutoff) in
     let prices = prices_mod.price_rows_at(db, cutoff, max_price_age) in
     let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
@@ -137,6 +153,7 @@ fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_j
   price_aggregate: price_aggregate,
   get_position: get_position,
   state_at: state_at,
+  state_payload_at: state_payload_at,
   scenario_at: scenario_at,
   export_account: export_account,
   export_account_at: export_account_at,
