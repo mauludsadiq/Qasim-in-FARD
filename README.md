@@ -228,6 +228,44 @@ GET /finance/export/ACCT-123
 
 ## Key Guarantees
 
+### Scenario Engine (NEW)
+
+Qasim now supports deterministic forward scenario evaluation.
+
+Endpoint:
+
+- GET /finance/scenario_at/<account>/<ts_unix>/<shock>
+
+Where:
+- shock is a decimal (e.g. -0.1 for -10%)
+
+The scenario engine computes:
+
+- shocked_positions
+- shocked_nav
+- pnl
+- scenario_digest
+
+The scenario_digest commits to:
+
+- account
+- as_of_ts
+- scenario
+- shock
+- shocked_positions
+- shocked_nav
+- pnl
+
+This ensures that forward projections are:
+
+- deterministic
+- reproducible
+- cryptographically verifiable
+
+Scenarios are derived from canonical state and do not alter the base state_digest.
+
+---
+
 ### Append-Only Receipt Chain (NEW)
 
 ### Canonical State Definition (UPDATED)
