@@ -228,6 +228,21 @@ GET /finance/export/ACCT-123
 
 ## Key Guarantees
 
+### Canonical HTTP Witnessing (NEW)
+
+Qasim now emits deterministic HTTP digests for every response:
+
+- X-Qasim-Request-Digest
+- X-Qasim-Response-Digest
+
+These are computed from canonical request and response payloads at the FARD handler boundary.
+
+This makes every API interaction externally auditable and replay-verifiable.
+
+---
+
+## Key Guarantees
+
 - No mutable hidden state
 - No unverifiable data
 - Full replayability
