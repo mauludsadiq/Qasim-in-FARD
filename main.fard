@@ -208,20 +208,40 @@ fn post_live_price(req) {
 }
 
 fn latest_price_rows() {
-  sqlite.query(db, "SELECT p1.symbol AS symbol, p1.mid AS mid, p1.ts_unix AS ts_unix
-                    FROM price_claims p1
-                    JOIN (
-                      SELECT symbol, MAX(ts_unix) AS max_ts
-                      FROM price_claims
-                      GROUP BY symbol
-                    ) p2
-                    ON p1.symbol = p2.symbol AND p1.ts_unix = p2.max_ts
-                    ORDER BY p1.symbol")
+  sqlite.query(db, "SELECT symbol,mid,venue,ts_unix,digest,issuer_pk_hex,sig_b64,payload_json
+                    FROM price_claims
+                    ORDER BY symbol, ts_unix, digest")
+}
+
+fn aggregate_symbol_prices(price_rows, symbol) {
+  let rows = list.filter(price_rows, fn(r) { r.symbol == symbol })
+  let values = list.map(rows, fn(r) { r.mid })
+  let n = list.len(values)
+  if n == 0 then { symbol: symbol, median: null, mean: null, variance: null, outliers: [], sources: [] }
+  else let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in let mean = sum / n in let variance = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) / n in let threshold = variance * 4 in let outliers = list.filter(rows, fn(r) { let d = r.mid - mean in (d * d) > threshold }) in { symbol: symbol, median: mean, mean: mean, variance: variance, outliers: outliers, sources: rows }
+}
+
+fn aggregate_all_prices(price_rows) {
+  let symbols = rec.keys(list.fold(price_rows, {}, fn(acc, r) {
+    if rec.has(acc, r.symbol) then acc else rec.set(acc, r.symbol, true)
+  }))
+  list.map(symbols, fn(sym) { aggregate_symbol_prices(price_rows, sym) })
+}
+
+fn consensus_price(price_rows, symbol) {
+  let agg = aggregate_symbol_prices(price_rows, symbol)
+  agg.median
+}
+
+fn price_aggregate(req) {
+  let prefix = "/finance/price/aggregate/"
+  let symbol = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let rows = latest_price_rows()
+  ok_json(aggregate_symbol_prices(rows, symbol))
 }
 
 fn find_price(prices, symbol) {
-  let hit = list.find(prices, fn(r) { r.symbol == symbol })
-  if rec.has(hit, "some") then hit.some.mid else null
+  consensus_price(prices, symbol)
 }
 
 fn account_positions(account) {
@@ -263,8 +283,7 @@ fn positions_from_rows(tx_rows, price_rows) {
 
   list.map(instruments, fn(inst) {
     let qty = rec.get(qtys, inst)
-    let hit = list.find(price_rows, fn(p) { p.symbol == str.concat([inst, "/USD"]) })
-    let price = if rec.has(hit, "some") then hit.some.mid else null
+    let price = consensus_price(price_rows, str.concat([inst, "/USD"]))
     let value = if price == null then null else qty * price
     { instrument: inst, qty: qty, price: price, value: value }
   })
@@ -315,12 +334,26 @@ fn get_position(req) {
   ok_json({ account: account, positions: positions, nav: nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
 }
 
+fn export_account(req) {
+  let prefix = "/finance/export/"
+  let account = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let txs = sqlite.query(db, str.concat([
+    "SELECT digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM tx WHERE account='", account, "' ORDER BY ts_unix, digest"
+  ]))
+  let prices = sqlite.query(db, "SELECT digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM price_claims ORDER BY symbol, ts_unix, digest")
+  let positions = account_positions(account)
+  let receipt = state_receipt(account, positions)
+  ok_json({ account: account, txs: txs, prices: prices, positions: positions, nav: nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+}
+
 fn handle(req) {
   if req.path == "/health" then health()
   else if req.path == "/finance/ingest/tx" then post_tx(req)
   else if req.path == "/finance/price/claim" then post_price(req)
   else if req.path == "/finance/live/price" then post_live_price(req)
   else if req.path == "/finance/replay" then replay(req)
+  else if str.starts_with(req.path, "/finance/price/aggregate/") then price_aggregate(req)
+  else if str.starts_with(req.path, "/finance/export/") then export_account(req)
   else if str.starts_with(req.path, "/finance/position/") then get_position(req)
   else { status: 404, headers: {}, body: "not found" }
 }
