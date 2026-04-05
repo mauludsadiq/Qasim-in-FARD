@@ -46,6 +46,17 @@ let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS price_claims (
 
 let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_price_symbol_ts ON price_claims(symbol, ts_unix)")
 
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS receipt_log (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  req_digest TEXT NOT NULL,
+  res_digest TEXT NOT NULL,
+  state_digest TEXT NOT NULL,
+  chain_digest TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+)")
+
+let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_receipt_log_seq ON receipt_log(seq)")
+
 fn ok_json(v) {
   { status: 200, headers: { "Content-Type": "application/json" }, body: json.encode(v) }
 }
@@ -404,7 +415,7 @@ fn export_account_at(req) {
 }
 
 fn handle(req) {
-  if req.path == "/health" then health()
+  let res = if req.path == "/health" then health()
   else if req.path == "/finance/ingest/tx" then post_tx(req)
   else if req.path == "/finance/price/claim" then post_price(req)
   else if req.path == "/finance/live/price" then post_live_price(req)
@@ -414,7 +425,30 @@ fn handle(req) {
   else if str.starts_with(req.path, "/finance/export/") then qasim_http.export_account(req, db, qasim_prices, qasim_state, ok_json)
   else if str.starts_with(req.path, "/finance/state_at/") then qasim_http.state_at(req, db, qasim_prices, qasim_state, ok_json, err_json)
   else if str.starts_with(req.path, "/finance/position/") then qasim_http.get_position(req, db, qasim_prices, qasim_state, ok_json)
-  else { status: 404, headers: {}, body: "not found" }
+  else { status: 404, headers: {}, body: "not found" } in
+  let req_payload = json.canonicalize({ path: req.path, body: req.body }) in
+  let req_digest = hash.sha256_text(req_payload) in
+  let res_payload = json.canonicalize({ status: res.status, headers: res.headers, body: res.body }) in
+  let res_digest = hash.sha256_text(res_payload) in
+  let state_digest = if rec.has(res.headers, "Content-Type") && rec.get(res.headers, "Content-Type") == "application/json" then let body_obj = json.decode(res.body) in if rec.has(body_obj, "state_digest") then rec.get(body_obj, "state_digest") else "" else "" in
+  let prev_rows = sqlite.query(db, "SELECT chain_digest FROM receipt_log ORDER BY seq DESC LIMIT 1") in
+  let prev_hit = list.find(prev_rows, fn(_) { true }) in
+  let prev_chain = if rec.has(prev_hit, "some") then prev_hit.some.chain_digest else "GENESIS" in
+  let chain_payload = json.canonicalize({ prev_chain_digest: prev_chain, request_digest: req_digest, response_digest: res_digest, state_digest: state_digest }) in
+  let chain_digest = hash.sha256_text(chain_payload) in
+  let _ = sqlite.exec(db, str.concat([
+    "INSERT INTO receipt_log (req_digest,res_digest,state_digest,chain_digest,payload_json) VALUES ('",
+    req_digest, "'", ", '",
+    res_digest, "'", ", '",
+    state_digest, "'", ", '",
+    chain_digest, "'", ", '",
+    chain_payload, "')"
+  ])) in
+  {
+    status: res.status,
+    headers: rec.set(rec.set(rec.set(res.headers, "X-Qasim-Request-Digest", req_digest), "X-Qasim-Response-Digest", res_digest), "X-Qasim-Chain-Digest", chain_digest),
+    body: res.body
+  }
 }
 
 let _ = net.serve(9801, fn(req) { handle(req) })

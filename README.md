@@ -228,6 +228,29 @@ GET /finance/export/ACCT-123
 
 ## Key Guarantees
 
+### Append-Only Receipt Chain (NEW)
+
+Qasim now persists an append-only receipt log for HTTP interactions.
+
+For each request, Qasim records:
+
+- request_digest
+- response_digest
+- state_digest
+- chain_digest
+
+The chain digest is computed from the previous chain digest plus the current request, response, and state commitments.
+
+Qasim also emits the live chain head over HTTP:
+
+- X-Qasim-Chain-Digest
+
+This makes the protocol history tamper-evident across requests, not just within a single response.
+
+---
+
+## Key Guarantees
+
 ### End-to-End State Verification (NEW)
 
 Qasim state digests are independently reproducible.
