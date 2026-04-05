@@ -230,6 +230,28 @@ GET /finance/export/ACCT-123
 
 ### Append-Only Receipt Chain (NEW)
 
+### Canonical State Definition (UPDATED)
+
+Qasim defines a single canonical state model.
+
+The state_digest commits to the full deterministic state payload:
+
+- account
+- as_of_ts
+- tx_digests
+- price_digests
+- positions
+- nav
+- risk_state
+
+The risk_state is not optional or advisory — it is a deterministic transform of positions and is included in the canonical state commitment.
+
+This ensures that any reported exposure, leverage, or concentration is cryptographically tied to the underlying state and fully reproducible.
+
+Any change to the state schema (e.g. adding risk_state) results in a new state_digest by definition.
+
+---
+
 ### Ed25519 Chain Signing (NEW)
 
 Qasim now signs the live chain head with Ed25519 and exposes both the signature and public key over HTTP.
