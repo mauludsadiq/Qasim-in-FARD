@@ -3,13 +3,38 @@ import("std/rec") as rec
 import("std/hash") as hash
 import("std/json") as json
 
+fn scenario_library() {
+  {
+    equity_down_10: { name: "equity_down_10", version: 1, shock_spec: { "_default": -0.1 } },
+    equity_up_10: { name: "equity_up_10", version: 1, shock_spec: { "_default": 0.1 } },
+    market_crash_20: { name: "market_crash_20", version: 1, shock_spec: { "_default": -0.2 } },
+    tech_selloff: { name: "tech_selloff", version: 1, shock_spec: { "AAPL": -0.2, "MSFT": -0.15, "NVDA": -0.18, "_default": 0 } },
+    single_name_gap_down: { name: "single_name_gap_down", version: 1, shock_spec: { "_default": 0 } },
+    bull_case: { name: "bull_case", version: 1, shock_spec: { "_default": 0.08 } }
+  }
+}
+
+fn named_scenario(name) {
+  let lib = scenario_library()
+  if rec.has(lib, name) then rec.get(lib, name)
+  else { name: name, version: 1, shock_spec: { "_default": 0 } }
+}
+
+fn resolve_scenario(spec_or_name) {
+  if rec.has(spec_or_name, "scenario_name") then named_scenario(spec_or_name.scenario_name)
+  else if rec.has(spec_or_name, "shock_spec") then spec_or_name
+  else { name: "ad_hoc", version: 1, shock_spec: spec_or_name }
+}
+
 fn shock_for(instrument, shock_spec) {
   if rec.has(shock_spec, instrument) then rec.get(shock_spec, instrument)
   else if rec.has(shock_spec, "_default") then rec.get(shock_spec, "_default")
   else 0
 }
 
-fn shocked_positions(positions, shock_spec) {
+fn shocked_positions(positions, scenario0) {
+  let scenario = resolve_scenario(scenario0)
+  let shock_spec = scenario.shock_spec
   list.map(positions, fn(p) {
     let shock = shock_for(p.instrument, shock_spec)
     let shocked_price = if p.price == null then null else p.price * (1 + shock)
@@ -39,21 +64,27 @@ fn scenario_pnl_of(shocked_positions) {
   })
 }
 
-fn scenario_state_of(account, as_of_ts, positions, shock_spec, name) {
-  let shocked = shocked_positions(positions, shock_spec)
+fn scenario_state_of(account, as_of_ts, positions, scenario0, fallback_name) {
+  let scenario = resolve_scenario(scenario0)
+  let shocked = shocked_positions(positions, scenario)
   let shocked_nav = scenario_nav_of(shocked)
   let pnl = scenario_pnl_of(shocked)
+  let scenario_name = if rec.has(scenario, "name") then scenario.name else fallback_name
+  let scenario_version = if rec.has(scenario, "version") then scenario.version else 1
+  let shock_spec = scenario.shock_spec
   let payload = {
     account: account,
     as_of_ts: as_of_ts,
-    scenario: name,
+    scenario: scenario_name,
+    scenario_version: scenario_version,
     shock_spec: shock_spec,
     shocked_positions: shocked,
     shocked_nav: shocked_nav,
     pnl: pnl
   }
   {
-    scenario: name,
+    scenario: scenario_name,
+    scenario_version: scenario_version,
     shock_spec: shock_spec,
     shocked_positions: shocked,
     shocked_nav: shocked_nav,
@@ -63,6 +94,9 @@ fn scenario_state_of(account, as_of_ts, positions, shock_spec, name) {
 }
 
 {
+  scenario_library: scenario_library,
+  named_scenario: named_scenario,
+  resolve_scenario: resolve_scenario,
   shock_for: shock_for,
   shocked_positions: shocked_positions,
   scenario_nav_of: scenario_nav_of,

@@ -230,6 +230,32 @@ GET /finance/export/ACCT-123
 
 ### Scenario Engine (NEW)
 
+### Scenario Libraries (NEW)
+
+Qasim now supports named, versioned scenario definitions.
+
+Examples:
+
+- equity_down_10
+- equity_up_10
+- market_crash_20
+- tech_selloff
+- bull_case
+
+Each named scenario resolves into a canonical shock_spec and returns:
+
+- scenario
+- scenario_version
+- shock_spec
+- shocked_positions
+- shocked_nav
+- pnl
+- scenario_digest
+
+This makes scenario definitions reusable, deterministic, and versioned as first-class risk objects.
+
+---
+
 ### Instrument-Level Shock Maps (NEW)
 
 Qasim scenarios now support per-instrument shock specifications.
