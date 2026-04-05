@@ -171,6 +171,24 @@ fn nav_of(positions) {
   })
 }
 
+fn positions_from_rows(tx_rows, price_rows) {
+  let qtys = list.fold(tx_rows, {}, fn(acc, r) {
+    let delta = if r.side == "buy" then r.qty else 0 - r.qty
+    if rec.has(acc, r.instrument) then rec.set(acc, r.instrument, rec.get(acc, r.instrument) + delta)
+    else rec.set(acc, r.instrument, delta)
+  })
+
+  let instruments = rec.keys(qtys)
+
+  list.map(instruments, fn(inst) {
+    let qty = rec.get(qtys, inst)
+    let hit = list.find(price_rows, fn(p) { p.symbol == str.concat([inst, "/USD"]) })
+    let price = if rec.has(hit, "some") then hit.some.mid else null
+    let value = if price == null then null else qty * price
+    { instrument: inst, qty: qty, price: price, value: value }
+  })
+}
+
 fn state_receipt(account, positions) {
   let tx_rows = sqlite.query(db, str.concat([
     "SELECT digest FROM tx WHERE account='", account, "' ORDER BY ts_unix, digest"
@@ -192,6 +210,22 @@ fn state_receipt(account, positions) {
   }
 }
 
+fn replay(req) {
+  let body = json.decode(req.body)
+  let account = if rec.has(body, "account") then rec.get(body, "account") else ""
+  let tx_rows = if rec.has(body, "txs") then rec.get(body, "txs") else []
+  let price_rows = if rec.has(body, "prices") then rec.get(body, "prices") else []
+  let positions = positions_from_rows(tx_rows, price_rows)
+  let payload = {
+    account: account,
+    tx_digests: list.map(tx_rows, fn(r) { if rec.has(r, "digest") then r.digest else hex_digest(r.payload_json) }),
+    price_digests: list.map(price_rows, fn(r) { if rec.has(r, "digest") then r.digest else hex_digest(r.payload_json) }),
+    positions: positions,
+    nav: nav_of(positions)
+  }
+  ok_json({ account: account, positions: positions, nav: nav_of(positions), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows), price_count: list.len(price_rows) })
+}
+
 fn get_position(req) {
   let prefix = "/finance/position/"
   let account = str.slice(req.path, str.len(prefix), str.len(req.path))
@@ -204,6 +238,7 @@ fn handle(req) {
   if req.path == "/health" then health()
   else if req.path == "/finance/ingest/tx" then post_tx(req)
   else if req.path == "/finance/price/claim" then post_price(req)
+  else if req.path == "/finance/replay" then replay(req)
   else if str.starts_with(req.path, "/finance/position/") then get_position(req)
   else { status: 404, headers: {}, body: "not found" }
 }
