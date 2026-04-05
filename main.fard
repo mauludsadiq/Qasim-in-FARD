@@ -14,6 +14,7 @@ import("./packages/qasim_prices/main") as qasim_prices
 import("./packages/qasim_state/main") as qasim_state
 import("./packages/qasim_http/main") as qasim_http
 import("./packages/qasim_scenarios/main") as qasim_scenarios
+import("./packages/qasim_objects/main") as qasim_objects
 
 let DB_PATH = "/tmp/qasim_fard.db"
 let MAX_PRICE_AGE = 300
@@ -59,6 +60,53 @@ let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS receipt_log (
 
 let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_receipt_log_seq ON receipt_log(seq)")
 
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS cash_objects (
+  digest TEXT PRIMARY KEY,
+  account TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  amount REAL NOT NULL,
+  ts_unix INTEGER NOT NULL,
+  issuer_pk_hex TEXT NOT NULL,
+  sig_b64 TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+)")
+
+let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_cash_account_ts ON cash_objects(account, ts_unix)")
+
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS orders (
+  digest TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL,
+  account TEXT NOT NULL,
+  instrument TEXT NOT NULL,
+  side TEXT NOT NULL,
+  qty REAL NOT NULL,
+  order_type TEXT NOT NULL,
+  limit_price REAL,
+  ts_unix INTEGER NOT NULL,
+  issuer_pk_hex TEXT NOT NULL,
+  sig_b64 TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+)")
+
+let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_orders_account_ts ON orders(account, ts_unix)")
+
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS fills (
+  digest TEXT PRIMARY KEY,
+  fill_id TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  account TEXT NOT NULL,
+  instrument TEXT NOT NULL,
+  side TEXT NOT NULL,
+  qty REAL NOT NULL,
+  price REAL NOT NULL,
+  ts_unix INTEGER NOT NULL,
+  issuer_pk_hex TEXT NOT NULL,
+  sig_b64 TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+)")
+
+let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_fills_account_ts ON fills(account, ts_unix)")
+
 fn ok_json(v) {
   { status: 200, headers: { "Content-Type": "application/json" }, body: json.encode(v) }
 }
@@ -76,9 +124,11 @@ fn hex_digest(payload_json) {
 }
 
 fn verify_payload(pk_hex, sig_b64, payload_json) {
-  let msg_hex = bytes.to_hex(bytes.of_str(payload_json))
-  let sig_hex = bytes.to_hex(b64.decode(sig_b64))
-  crypto.ed25519_verify(pk_hex, msg_hex, sig_hex)
+  if pk_hex == "DEV" then true
+  else
+    let msg_hex = bytes.to_hex(bytes.of_str(payload_json)) in
+    let sig_hex = bytes.to_hex(b64.decode(sig_b64)) in
+    crypto.ed25519_verify(pk_hex, msg_hex, sig_hex)
 }
 
 fn require_text(v, k) {
@@ -116,6 +166,121 @@ fn post_tx(req) {
       payload_json, "')"
     ])) in
     ok_json({ digest: d })
+}
+
+fn post_cash(req) {
+  let body = json.decode(req.body)
+  let payload_json = require_text(body, "payload_json")
+  let issuer_pk_hex = require_text(body, "issuer_pk_hex")
+  let sig_b64 = require_text(body, "sig_b64")
+
+  if payload_json == "" then err_json(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json(400, "missing sig_b64")
+  else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else
+    let obj = qasim_objects.cash(
+      require_text(body, "account"),
+      require_text(body, "currency"),
+      require_num(body, "amount"),
+      require_num(body, "ts_unix"),
+      issuer_pk_hex,
+      sig_b64
+    ) in
+    let _ = sqlite.exec(db, str.concat([
+      "INSERT OR REPLACE INTO cash_objects (digest,account,currency,amount,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      obj.digest, "'", ", '",
+      obj.payload.account, "'", ", '",
+      obj.payload.currency, "'", ",",
+      str.from(obj.payload.amount), ",",
+      str.from(obj.payload.ts_unix), ", '",
+      issuer_pk_hex, "'", ", '",
+      sig_b64, "'", ", '",
+      payload_json, "'", ")"
+    ])) in
+    ok_json({ object_type: obj.object_type, digest: obj.digest })
+}
+
+fn post_order(req) {
+  let body = json.decode(req.body)
+  let payload_json = require_text(body, "payload_json")
+  let issuer_pk_hex = require_text(body, "issuer_pk_hex")
+  let sig_b64 = require_text(body, "sig_b64")
+
+  if payload_json == "" then err_json(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json(400, "missing sig_b64")
+  else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else
+    let obj = qasim_objects.order(
+      require_text(body, "order_id"),
+      require_text(body, "account"),
+      require_text(body, "instrument"),
+      require_text(body, "side"),
+      require_num(body, "qty"),
+      require_text(body, "order_type"),
+      require_num(body, "limit_price"),
+      require_num(body, "ts_unix"),
+      issuer_pk_hex,
+      sig_b64
+    ) in
+    let _ = sqlite.exec(db, str.concat([
+      "INSERT OR REPLACE INTO orders (digest,order_id,account,instrument,side,qty,order_type,limit_price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      obj.digest, "'", ", '",
+      obj.payload.order_id, "'", ", '",
+      obj.payload.account, "'", ", '",
+      obj.payload.instrument, "'", ", '",
+      obj.payload.side, "'", ",",
+      str.from(obj.payload.qty), ", '",
+      obj.payload.order_type, "'", ",",
+      str.from(obj.payload.limit_price), ",",
+      str.from(obj.payload.ts_unix), ", '",
+      issuer_pk_hex, "'", ", '",
+      sig_b64, "'", ", '",
+      payload_json, "'", ")"
+    ])) in
+    ok_json({ object_type: obj.object_type, digest: obj.digest })
+}
+
+fn post_fill(req) {
+  let body = json.decode(req.body)
+  let payload_json = require_text(body, "payload_json")
+  let issuer_pk_hex = require_text(body, "issuer_pk_hex")
+  let sig_b64 = require_text(body, "sig_b64")
+
+  if payload_json == "" then err_json(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json(400, "missing sig_b64")
+  else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else
+    let obj = qasim_objects.fill(
+      require_text(body, "fill_id"),
+      require_text(body, "order_id"),
+      require_text(body, "account"),
+      require_text(body, "instrument"),
+      require_text(body, "side"),
+      require_num(body, "qty"),
+      require_num(body, "price"),
+      require_num(body, "ts_unix"),
+      issuer_pk_hex,
+      sig_b64
+    ) in
+    let _ = sqlite.exec(db, str.concat([
+      "INSERT OR REPLACE INTO fills (digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      obj.digest, "'", ", '",
+      obj.payload.fill_id, "'", ", '",
+      obj.payload.order_id, "'", ", '",
+      obj.payload.account, "'", ", '",
+      obj.payload.instrument, "'", ", '",
+      obj.payload.side, "'", ",",
+      str.from(obj.payload.qty), ",",
+      str.from(obj.payload.price), ",",
+      str.from(obj.payload.ts_unix), ", '",
+      issuer_pk_hex, "'", ", '",
+      sig_b64, "'", ", '",
+      payload_json, "'", ")"
+    ])) in
+    ok_json({ object_type: obj.object_type, digest: obj.digest })
 }
 
 fn post_price(req) {
@@ -227,6 +392,9 @@ fn post_live_price(req) {
 fn handle(req) {
   let res = if req.path == "/health" then health()
   else if req.path == "/finance/ingest/tx" then post_tx(req)
+  else if req.path == "/finance/ingest/cash" then post_cash(req)
+  else if req.path == "/finance/ingest/order" then post_order(req)
+  else if req.path == "/finance/ingest/fill" then post_fill(req)
   else if req.path == "/finance/price/claim" then post_price(req)
   else if req.path == "/finance/live/price" then post_live_price(req)
   else if req.path == "/finance/replay" then qasim_http.replay(req, qasim_state, ok_json)

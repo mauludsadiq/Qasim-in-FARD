@@ -1,0 +1,65 @@
+import("std/json") as json
+import("std/hash") as hash
+import("std/rec") as rec
+
+fn canonical_digest(payload) {
+  hash.sha256_text(json.canonicalize(payload))
+}
+
+fn signed_object(object_type, payload, issuer_pk_hex, sig_b64) {
+  {
+    object_type: object_type,
+    payload: payload,
+    issuer_pk_hex: issuer_pk_hex,
+    sig_b64: sig_b64,
+    digest: canonical_digest({
+      object_type: object_type,
+      payload: payload,
+      issuer_pk_hex: issuer_pk_hex,
+      sig_b64: sig_b64
+    })
+  }
+}
+
+fn cash(account, currency, amount, ts_unix, issuer_pk_hex, sig_b64) {
+  signed_object("cash", {
+    account: account,
+    currency: currency,
+    amount: amount,
+    ts_unix: ts_unix
+  }, issuer_pk_hex, sig_b64)
+}
+
+fn order(order_id, account, instrument, side, qty, order_type, limit_price, ts_unix, issuer_pk_hex, sig_b64) {
+  signed_object("order", {
+    order_id: order_id,
+    account: account,
+    instrument: instrument,
+    side: side,
+    qty: qty,
+    order_type: order_type,
+    limit_price: limit_price,
+    ts_unix: ts_unix
+  }, issuer_pk_hex, sig_b64)
+}
+
+fn fill(fill_id, order_id, account, instrument, side, qty, price, ts_unix, issuer_pk_hex, sig_b64) {
+  signed_object("fill", {
+    fill_id: fill_id,
+    order_id: order_id,
+    account: account,
+    instrument: instrument,
+    side: side,
+    qty: qty,
+    price: price,
+    ts_unix: ts_unix
+  }, issuer_pk_hex, sig_b64)
+}
+
+{
+  canonical_digest: canonical_digest,
+  signed_object: signed_object,
+  cash: cash,
+  order: order,
+  fill: fill
+}

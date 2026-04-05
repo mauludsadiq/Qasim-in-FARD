@@ -4,8 +4,8 @@ import("std/rec") as rec
 import("std/hash") as hash
 import("std/json") as json
 
-fn positions_from_rows(tx_rows, price_rows, prices_mod) {
-  let qtys = list.fold(tx_rows, {}, fn(acc, r) {
+fn positions_from_fills(fill_rows, price_rows, prices_mod) {
+  let qtys = list.fold(fill_rows, {}, fn(acc, r) {
     let delta = if r.side == "buy" then r.qty else 0 - r.qty
     if rec.has(acc, r.instrument) then rec.set(acc, r.instrument, rec.get(acc, r.instrument) + delta)
     else rec.set(acc, r.instrument, delta)
@@ -21,8 +21,12 @@ fn positions_from_rows(tx_rows, price_rows, prices_mod) {
   })
 }
 
-fn nav_of(positions) {
-  list.fold(positions, 0, fn(acc, p) {
+fn cash_balance_of(cash_rows) {
+  list.fold(cash_rows, 0, fn(acc, r) { acc + r.amount })
+}
+
+fn nav_of(positions, cash_balance) {
+  cash_balance + list.fold(positions, 0, fn(acc, p) {
     if p.value == null then acc else acc + p.value
   })
 }
@@ -36,7 +40,9 @@ fn gross_exposure_of(positions) {
 }
 
 fn net_exposure_of(positions) {
-  nav_of(positions)
+  list.fold(positions, 0, fn(acc, p) {
+    if p.value == null then acc else acc + p.value
+  })
 }
 
 fn long_exposure_of(positions) {
@@ -68,8 +74,8 @@ fn max_abs_weight_of(items) {
   })
 }
 
-fn risk_state_of(positions) {
-  let nav = nav_of(positions)
+fn risk_state_of(positions, cash_balance) {
+  let nav = nav_of(positions, cash_balance)
   let gross = gross_exposure_of(positions)
   let net = net_exposure_of(positions)
   let long_exposure = long_exposure_of(positions)
@@ -89,6 +95,7 @@ fn risk_state_of(positions) {
   let concentration = max_abs_weight_of(position_risk)
   {
     nav: nav,
+    cash_balance: cash_balance,
     gross_exposure: gross,
     net_exposure: net,
     long_exposure: long_exposure,
@@ -99,35 +106,41 @@ fn risk_state_of(positions) {
   }
 }
 
-fn state_payload_from_rows(account, tx_rows, price_rows, positions, as_of_ts) {
-  let tx_digests = list.map(tx_rows, fn(r) { r.digest })
+fn state_payload_from_objects(account, fill_rows, cash_rows, price_rows, positions, as_of_ts) {
+  let fill_digests = list.map(fill_rows, fn(r) { r.digest })
+  let cash_digests = list.map(cash_rows, fn(r) { r.digest })
   let price_digests = list.map(price_rows, fn(r) { r.digest })
-  let risk_state = risk_state_of(positions)
+  let cash_balance = cash_balance_of(cash_rows)
+  let risk_state = risk_state_of(positions, cash_balance)
   {
     account: account,
     as_of_ts: as_of_ts,
-    tx_digests: tx_digests,
+    fill_digests: fill_digests,
+    cash_digests: cash_digests,
     price_digests: price_digests,
     positions: positions,
-    nav: nav_of(positions),
+    cash_balance: cash_balance,
+    nav: nav_of(positions, cash_balance),
     risk_state: risk_state
   }
 }
 
-fn state_receipt_from_rows(account, tx_rows, price_rows, positions, as_of_ts) {
-  let payload = state_payload_from_rows(account, tx_rows, price_rows, positions, as_of_ts)
+fn state_receipt_from_objects(account, fill_rows, cash_rows, price_rows, positions, as_of_ts) {
+  let payload = state_payload_from_objects(account, fill_rows, cash_rows, price_rows, positions, as_of_ts)
   {
     state_digest: hash.sha256_text(json.encode(payload)),
-    tx_count: list.len(payload.tx_digests),
+    fill_count: list.len(payload.fill_digests),
+    cash_count: list.len(payload.cash_digests),
     price_count: list.len(payload.price_digests),
     risk_state: payload.risk_state
   }
 }
 
 {
-  positions_from_rows: positions_from_rows,
+  positions_from_fills: positions_from_fills,
+  cash_balance_of: cash_balance_of,
   nav_of: nav_of,
   risk_state_of: risk_state_of,
-  state_payload_from_rows: state_payload_from_rows,
-  state_receipt_from_rows: state_receipt_from_rows
+  state_payload_from_objects: state_payload_from_objects,
+  state_receipt_from_objects: state_receipt_from_objects
 }

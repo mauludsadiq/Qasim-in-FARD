@@ -4,6 +4,42 @@ import("std/rec") as rec
 import("std/json") as json
 import("std/hash") as hash
 import("std/sqlite") as sqlite
+fn fill_rows_for_account(db, account) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM fills WHERE account='",
+    account,
+    "' ORDER BY ts_unix, digest"
+  ]))
+}
+
+fn fill_rows_for_account_at(db, account, ts_unix_cutoff) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM fills WHERE account='",
+    account,
+    "' AND ts_unix<=",
+    str.from(ts_unix_cutoff),
+    " ORDER BY ts_unix, digest"
+  ]))
+}
+
+fn cash_rows_for_account(db, account) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,account,currency,amount,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM cash_objects WHERE account='",
+    account,
+    "' ORDER BY ts_unix, digest"
+  ]))
+}
+
+fn cash_rows_for_account_at(db, account, ts_unix_cutoff) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,account,currency,amount,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM cash_objects WHERE account='",
+    account,
+    "' AND ts_unix<=",
+    str.from(ts_unix_cutoff),
+    " ORDER BY ts_unix, digest"
+  ]))
+}
+
 fn tx_rows_for_account(db, account) {
   sqlite.query(db, str.concat([
     "SELECT digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM tx WHERE account='",
@@ -32,9 +68,12 @@ fn price_aggregate(req, db, prices_mod, ok_json) {
 fn get_position(req, db, prices_mod, state_mod, ok_json) {
   let prefix = "/finance/position/"
   let account = str.slice(req.path, str.len(prefix), str.len(req.path))
-  let positions = state_mod.positions_from_rows(tx_rows_for_account(db, account), prices_mod.latest_price_rows(db), prices_mod)
-  let receipt = state_mod.state_receipt_from_rows(account, tx_rows_for_account(db, account), prices_mod.latest_price_rows(db), positions, null)
-  ok_json({ account: account, positions: positions, nav: state_mod.nav_of(positions), risk_state: receipt.risk_state, state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+  let fills = fill_rows_for_account(db, account)
+  let cash = cash_rows_for_account(db, account)
+  let prices = prices_mod.latest_price_rows(db)
+  let positions = state_mod.positions_from_fills(fills, prices, prices_mod)
+  let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
+  ok_json({ account: account, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
 fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
@@ -47,21 +86,23 @@ fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
   else
     let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
-    let txs = tx_rows_for_account_at(db, account, cutoff) in
+    let fills = fill_rows_for_account_at(db, account, cutoff) in
+    let cash = cash_rows_for_account_at(db, account, cutoff) in
     let prices = prices_mod.price_rows_at(db, cutoff, max_price_age) in
-    let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
-    let receipt = state_mod.state_receipt_from_rows(account, txs, prices, positions, cutoff) in
-    ok_json({ account: account, as_of_ts: cutoff, positions: positions, nav: state_mod.nav_of(positions), risk_state: receipt.risk_state, state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+    let positions = state_mod.positions_from_fills(fills, prices, prices_mod) in
+    let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, cutoff) in
+    ok_json({ account: account, as_of_ts: cutoff, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
 fn export_account(req, db, prices_mod, state_mod, ok_json) {
   let prefix = "/finance/export/"
   let account = str.slice(req.path, str.len(prefix), str.len(req.path))
-  let txs = tx_rows_for_account(db, account)
+  let fills = fill_rows_for_account(db, account)
+  let cash = cash_rows_for_account(db, account)
   let prices = prices_mod.latest_price_rows(db)
-  let positions = state_mod.positions_from_rows(txs, prices, prices_mod)
-  let receipt = state_mod.state_receipt_from_rows(account, txs, prices, positions, null)
-  ok_json({ account: account, txs: txs, prices: prices, positions: positions, nav: state_mod.nav_of(positions), risk_state: receipt.risk_state, state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+  let positions = state_mod.positions_from_fills(fills, prices, prices_mod)
+  let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
+  ok_json({ account: account, fills: fills, cash: cash, prices: prices, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
 fn export_account_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
@@ -74,11 +115,12 @@ fn export_account_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err
   else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
   else
     let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
-    let txs = tx_rows_for_account_at(db, account, cutoff) in
+    let fills = fill_rows_for_account_at(db, account, cutoff) in
+    let cash = cash_rows_for_account_at(db, account, cutoff) in
     let prices = prices_mod.price_rows_at(db, cutoff, max_price_age) in
-    let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
-    let receipt = state_mod.state_receipt_from_rows(account, txs, prices, positions, cutoff) in
-    ok_json({ account: account, as_of_ts: cutoff, txs: txs, prices: prices, positions: positions, nav: state_mod.nav_of(positions), risk_state: receipt.risk_state, state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+    let positions = state_mod.positions_from_fills(fills, prices, prices_mod) in
+    let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, cutoff) in
+    ok_json({ account: account, as_of_ts: cutoff, fills: fills, cash: cash, prices: prices, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
 fn replay(req, state_mod, ok_json) {
@@ -89,16 +131,16 @@ fn replay(req, state_mod, ok_json) {
   let as_of_ts = if rec.has(body, "as_of_ts") then rec.get(body, "as_of_ts") else null
   let tx_rows2 = if as_of_ts == null then tx_rows else list.filter(tx_rows, fn(r) { r.ts_unix <= as_of_ts })
   let price_rows2 = if as_of_ts == null then price_rows else list.filter(price_rows, fn(r) { r.ts_unix <= as_of_ts })
-  let positions = state_mod.positions_from_rows(tx_rows2, price_rows2, qasim_prices)
+  let positions = state_mod.positions_from_fills(tx_rows2, price_rows2, qasim_prices)
   let payload = {
     account: account,
     as_of_ts: as_of_ts,
     tx_digests: list.map(tx_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(r.payload_json) }),
     price_digests: list.map(price_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(r.payload_json) }),
     positions: positions,
-    nav: state_mod.nav_of(positions)
+    nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash))
   }
-  ok_json({ account: account, as_of_ts: as_of_ts, positions: positions, nav: state_mod.nav_of(positions), risk_state: state_mod.risk_state_of(positions), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows2), price_count: list.len(price_rows2) })
+  ok_json({ account: account, as_of_ts: as_of_ts, positions: positions, nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: state_mod.risk_state_of(positions), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows2), price_count: list.len(price_rows2) })
 }
 
 
@@ -121,10 +163,11 @@ fn state_payload_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_
   else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
   else
     let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
-    let txs = tx_rows_for_account_at(db, account, cutoff) in
+    let fills = fill_rows_for_account_at(db, account, cutoff) in
+    let cash = cash_rows_for_account_at(db, account, cutoff) in
     let prices = prices_mod.price_rows_at(db, cutoff, max_price_age) in
-    let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
-    ok_json(state_mod.state_payload_from_rows(account, txs, prices, positions, cutoff))
+    let positions = state_mod.positions_from_fills(fills, prices, prices_mod) in
+    ok_json(state_mod.state_payload_from_objects(account, fills, cash, prices, positions, cutoff))
 }
 
 fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_json, err_json) {
@@ -139,12 +182,13 @@ fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_j
   else
     let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
     let shock = if str.contains(shock_text, ":") then parse_shock_map(shock_text) else { scenario_name: shock_text } in
-    let txs = tx_rows_for_account_at(db, account, cutoff) in
+    let fills = fill_rows_for_account_at(db, account, cutoff) in
+    let cash = cash_rows_for_account_at(db, account, cutoff) in
     let prices = prices_mod.price_rows_at(db, cutoff, max_price_age) in
-    let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
-    let base_receipt = state_mod.state_receipt_from_rows(account, txs, prices, positions, cutoff) in
+    let positions = state_mod.positions_from_fills(fills, prices, prices_mod) in
+    let base_receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, cutoff) in
     let scenario = scenario_mod.scenario_state_of(account, cutoff, positions, shock, "instrument_shock_map") in
-    ok_json({ account: account, as_of_ts: cutoff, positions: positions, nav: state_mod.nav_of(positions), risk_state: base_receipt.risk_state, state_digest: base_receipt.state_digest, scenario: scenario, tx_count: base_receipt.tx_count, price_count: base_receipt.price_count })
+    ok_json({ account: account, as_of_ts: cutoff, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: base_receipt.risk_state, state_digest: base_receipt.state_digest, scenario: scenario, fill_count: base_receipt.fill_count, cash_count: base_receipt.cash_count, price_count: base_receipt.price_count })
 }
 
 {

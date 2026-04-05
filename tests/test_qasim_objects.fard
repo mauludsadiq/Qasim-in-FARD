@@ -1,0 +1,17 @@
+import("../packages/qasim_objects/main") as obj
+
+let c = obj.cash("ACCT-123", "USD", 5000, 1731000125, "pk1", "sig1")
+let o = obj.order("ORD-1", "ACCT-123", "AAPL", "buy", 10, "limit", 170, 1731000125, "pk1", "sig1")
+let f = obj.fill("FILL-1", "ORD-1", "ACCT-123", "AAPL", "buy", 6, 171, 1731000126, "pk1", "sig1")
+
+test "cash object type" { c.object_type == "cash" }
+test "cash payload account" { c.payload.account == "ACCT-123" }
+test "cash digest present" { c.digest != "" }
+
+test "order object type" { o.object_type == "order" }
+test "order payload limit" { o.payload.limit_price == 170 }
+test "order digest present" { o.digest != "" }
+
+test "fill object type" { f.object_type == "fill" }
+test "fill payload order_id" { f.payload.order_id == "ORD-1" }
+test "fill digest present" { f.digest != "" }
