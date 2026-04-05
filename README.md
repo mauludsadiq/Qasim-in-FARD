@@ -175,64 +175,47 @@ Output:
 
 ---
 
-## State Commitment
+## Canonical State Model
 
-State = SHA256(
+State is defined as:
+
+state_digest = SHA256(
   account,
+  as_of_ts,
   tx_digests,
   price_digests,
   positions,
-  nav
+  nav,
+  risk_state
 )
 
-Guarantees:
-- reproducibility
-- tamper detection
-- auditability
+Where:
+
+risk_state = deterministic transform of positions including:
+- gross_exposure
+- net_exposure
+- long_exposure
+- short_exposure
+- leverage
+- concentration
+
+This is the single canonical state definition.
 
 ---
 
-## Consensus Model
+## Scenario System
 
-For each symbol:
+Qasim supports deterministic scenario evaluation as first-class transforms.
 
-1. Collect price claims
-2. Compute:
-   - mean
-   - variance
-3. Detect outliers:
-   (x - mean)^2 > 4 × variance
+### Scenario Types
 
-Consensus price = mean
+1. Instrument shock maps
 
----
+Example:
 
-## Example Flow
+AAPL:-0.2,MSFT:-0.1
 
-1. Ingest transaction
-POST /finance/ingest/tx
-
-2. Ingest prices
-POST /finance/live/price
-
-3. Query aggregate
-GET /finance/price/aggregate/AAPL/USD
-
-4. Compute NAV
-GET /finance/position/ACCT-123
-
-5. Export state
-GET /finance/export/ACCT-123
-
----
-
-## Key Guarantees
-
-### Scenario Engine (NEW)
-
-### Scenario Libraries (NEW)
-
-Qasim now supports named, versioned scenario definitions.
+2. Named scenarios
 
 Examples:
 
@@ -242,7 +225,13 @@ Examples:
 - tech_selloff
 - bull_case
 
-Each named scenario resolves into a canonical shock_spec and returns:
+Each resolves to a canonical shock_spec.
+
+---
+
+### Scenario Output
+
+Each scenario returns:
 
 - scenario
 - scenario_version
@@ -252,104 +241,43 @@ Each named scenario resolves into a canonical shock_spec and returns:
 - pnl
 - scenario_digest
 
-This makes scenario definitions reusable, deterministic, and versioned as first-class risk objects.
-
----
-
-### Instrument-Level Shock Maps (NEW)
-
-Qasim scenarios now support per-instrument shock specifications.
-
-Endpoint:
-
-- GET /finance/scenario_at/<account>/<ts_unix>/<shock_spec>
-
-Example:
-
-- /finance/scenario_at/ACCT-123/1731000125/AAPL:-0.2
-
-Shock map semantics:
-
-- explicit instrument shocks are applied by symbol
-- unspecified instruments fall back to _default = 0
-
-Returned scenario state includes:
-
-- shock_spec
-- shocked_positions
-- shocked_nav
-- pnl
-- scenario_digest
-
-This upgrades Qasim from uniform scalar shocks to deterministic instrument-level scenario transforms.
-
----
-
-### Scenario Engine (NEW)
-
-Qasim now supports deterministic forward scenario evaluation.
-
-Endpoint:
-
-- GET /finance/scenario_at/<account>/<ts_unix>/<shock>
-
 Where:
-- shock is a decimal (e.g. -0.1 for -10%)
 
-The scenario engine computes:
+scenario_digest = SHA256(
+  account,
+  as_of_ts,
+  scenario,
+  scenario_version,
+  shock_spec,
+  shocked_positions,
+  shocked_nav,
+  pnl
+)
 
-- shocked_positions
-- shocked_nav
-- pnl
-- scenario_digest
-
-The scenario_digest commits to:
-
-- account
-- as_of_ts
-- scenario
-- shock
-- shocked_positions
-- shocked_nav
-- pnl
-
-This ensures that forward projections are:
-
-- deterministic
-- reproducible
-- cryptographically verifiable
-
-Scenarios are derived from canonical state and do not alter the base state_digest.
+Scenarios do not modify base state_digest.
 
 ---
 
-### Append-Only Receipt Chain (NEW)
+## Receipt Chain
 
-### Canonical State Definition (UPDATED)
+Qasim maintains an append-only chain across requests.
 
-Qasim defines a single canonical state model.
+Each request records:
 
-The state_digest commits to the full deterministic state payload:
+- request_digest
+- response_digest
+- state_digest
+- chain_digest
 
-- account
-- as_of_ts
-- tx_digests
-- price_digests
-- positions
-- nav
-- risk_state
+Chain rule:
 
-The risk_state is not optional or advisory — it is a deterministic transform of positions and is included in the canonical state commitment.
-
-This ensures that any reported exposure, leverage, or concentration is cryptographically tied to the underlying state and fully reproducible.
-
-Any change to the state schema (e.g. adding risk_state) results in a new state_digest by definition.
+chain_digest_n = SHA256(chain_digest_{n-1}, request, response, state)
 
 ---
 
-### Ed25519 Chain Signing (NEW)
+## Cryptographic Signing
 
-Qasim now signs the live chain head with Ed25519 and exposes both the signature and public key over HTTP.
+Qasim signs the chain head using Ed25519.
 
 Headers:
 
@@ -357,79 +285,53 @@ Headers:
 - X-Qasim-Chain-Public-Key
 - X-Qasim-Chain-Signature
 
-This allows any client to verify that the chain head was produced by the holder of the corresponding Ed25519 secret key.
-
 ---
 
-### Append-Only Receipt Chain (NEW)
+## HTTP Witnessing
 
-Qasim now persists an append-only receipt log for HTTP interactions.
-
-For each request, Qasim records:
-
-- request_digest
-- response_digest
-- state_digest
-- chain_digest
-
-The chain digest is computed from the previous chain digest plus the current request, response, and state commitments.
-
-Qasim also emits the live chain head over HTTP:
-
-- X-Qasim-Chain-Digest
-
-This makes the protocol history tamper-evident across requests, not just within a single response.
-
----
-
-## Key Guarantees
-
-### End-to-End State Verification (NEW)
-
-Qasim state digests are independently reproducible.
-
-For any exported account state, a client can reconstruct the canonical payload:
-
-- account
-- as_of_ts
-- tx_digests
-- price_digests
-- positions
-- nav
-
-and recompute:
-
-state_digest = sha256(canonical_payload)
-
-A matching digest proves that the returned positions and NAV are exactly the committed state.
-
----
-
-## Key Guarantees
-
-### Canonical HTTP Witnessing (NEW)
-
-Qasim now emits deterministic HTTP digests for every response:
+Each response includes:
 
 - X-Qasim-Request-Digest
 - X-Qasim-Response-Digest
 
-These are computed from canonical request and response payloads at the FARD handler boundary.
-
-This makes every API interaction externally auditable and replay-verifiable.
+These are canonical digests at the handler boundary.
 
 ---
 
-## Key Guarantees
+## Implemented
 
-- No mutable hidden state
-- No unverifiable data
-- Full replayability
-- Deterministic outputs
+- deterministic state
+- time-indexed state (state_at / export_at)
+- canonical risk_state
+- multi-source price aggregation
+- append-only receipt chain
+- Ed25519 chain signing
+- instrument-level scenarios
+- named scenario libraries (versioned)
 
 ---
 
 ## Limitations
+
+- mean consensus (no weighting yet)
+- no trimmed mean
+- no URL decoding
+- HMAC used for live feed ingestion
+- limited asset coverage
+
+---
+
+## Future Extensions
+
+- weighted consensus
+- trimmed mean
+- signature verification on read
+- URL decoding
+- multi-asset expansion
+- matching / clearing engine
+- full FARD execution receipts per request
+
+---
 
 - Mean used instead of median (no sort in stdlib)
 - No weighting across sources
