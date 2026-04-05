@@ -145,10 +145,14 @@ fn post_live_price(req) {
   let venue = require_text(body, "venue")
   let url = require_text(body, "url")
   let feed_type = if rec.has(body, "feed_type") then rec.get(body, "feed_type") else "simple_json"
+  let issuer_pk_hex = require_text(body, "issuer_pk_hex")
+  let signing_secret_hex = require_text(body, "signing_secret_hex")
 
   if symbol == "" then err_json(400, "missing symbol")
   else if venue == "" then err_json(400, "missing venue")
   else if url == "" then err_json(400, "missing url")
+  else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
+  else if signing_secret_hex == "" then err_json(400, "missing signing_secret_hex")
   else
     let resp = http.get(url) in
     let src = json.decode(resp.body) in
@@ -163,17 +167,44 @@ fn post_live_price(req) {
       let payload_json = json.canonicalize(payload) in
       let d = hex_digest(payload_json) in
       let source_body_digest = hash.sha256_text(resp.body) in
+      let receipt = {
+        source_url: url,
+        source_body_digest: source_body_digest,
+        feed_type: feed_type,
+        symbol: symbol,
+        venue: venue,
+        mid: mid,
+        ts_unix: ts_unix
+      } in
+      let receipt_json = json.canonicalize(receipt) in
+      let receipt_digest = hash.sha256_text(receipt_json) in
+      let sig_hex = crypto.hmac_sha256(signing_secret_hex, receipt_json) in
+      let sig_b64 = b64.encode(bytes.from_hex(sig_hex)) in
       let _ = sqlite.exec(db, str.concat([
         "INSERT OR REPLACE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
-        d, "'", ", '",
-        symbol, "'", ",",
-        str.from(mid), ", '",
-        venue, "'", ",",
-        str.from(ts_unix), ", 'LIVE_HTTP', '",
-        source_body_digest, "'", ", '",
+        d, "','",
+        symbol, "',",
+        str.from(mid), ",'",
+        venue, "',",
+        str.from(ts_unix), ",'",
+        issuer_pk_hex, "','",
+        sig_b64, "','",
         payload_json, "')"
       ])) in
-      ok_json({ digest: d, symbol: symbol, venue: venue, feed_type: feed_type, source_url: url, source_body_digest: source_body_digest, mid: mid, ts_unix: ts_unix })
+      ok_json({
+        digest: d,
+        symbol: symbol,
+        venue: venue,
+        feed_type: feed_type,
+        source_url: url,
+        source_body_digest: source_body_digest,
+        receipt_digest: receipt_digest,
+        receipt_json: receipt_json,
+        issuer_pk_hex: issuer_pk_hex,
+        sig_b64: sig_b64,
+        mid: mid,
+        ts_unix: ts_unix
+      })
 }
 
 fn latest_price_rows() {
