@@ -176,7 +176,7 @@ fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_j
   let parts = str.split(rest, "/")
   let account = if list.len(parts) > 0 then parts[0] else ""
   let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
-  let shock_text = if list.len(parts) > 2 then parts[2] else "{}"
+  let shock_text = if list.len(parts) > 2 then parts[2] else ""
   if account == "" then err_json(400, "missing account")
   else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
   else
@@ -186,9 +186,30 @@ fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_j
     let cash = cash_rows_for_account_at(db, account, cutoff) in
     let prices = prices_mod.price_rows_at(db, cutoff, max_price_age) in
     let positions = state_mod.positions_from_fills(fills, prices, prices_mod) in
+    let cash_balance = state_mod.cash_balance_of(cash) in
     let base_receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, cutoff) in
-    let scenario = scenario_mod.scenario_state_of(account, cutoff, positions, shock, "instrument_shock_map") in
-    ok_json({ account: account, as_of_ts: cutoff, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: base_receipt.risk_state, state_digest: base_receipt.state_digest, scenario: scenario, fill_count: base_receipt.fill_count, cash_count: base_receipt.cash_count, price_count: base_receipt.price_count })
+    let raw_scenario = scenario_mod.scenario_state_of(account, cutoff, positions, shock, "ad_hoc") in
+    let shocked_nav = cash_balance + raw_scenario.shocked_nav in
+    let scenario_payload = {
+      account: account,
+      as_of_ts: cutoff,
+      scenario: raw_scenario.scenario,
+      scenario_version: raw_scenario.scenario_version,
+      shock_spec: raw_scenario.shock_spec,
+      shocked_positions: raw_scenario.shocked_positions,
+      shocked_nav: shocked_nav,
+      pnl: raw_scenario.pnl
+    } in
+    let scenario = {
+      scenario: raw_scenario.scenario,
+      scenario_version: raw_scenario.scenario_version,
+      shock_spec: raw_scenario.shock_spec,
+      shocked_positions: raw_scenario.shocked_positions,
+      shocked_nav: shocked_nav,
+      pnl: raw_scenario.pnl,
+      scenario_digest: hash.sha256_text(json.encode(scenario_payload))
+    } in
+    ok_json({ account: account, as_of_ts: cutoff, positions: positions, cash_balance: cash_balance, nav: state_mod.nav_of(positions, cash_balance), risk_state: base_receipt.risk_state, state_digest: base_receipt.state_digest, scenario: scenario, fill_count: base_receipt.fill_count, cash_count: base_receipt.cash_count, price_count: base_receipt.price_count })
 }
 
 {
