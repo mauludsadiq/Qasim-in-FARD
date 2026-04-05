@@ -171,11 +171,33 @@ fn nav_of(positions) {
   })
 }
 
+fn state_receipt(account, positions) {
+  let tx_rows = sqlite.query(db, str.concat([
+    "SELECT digest FROM tx WHERE account='", account, "' ORDER BY ts_unix, digest"
+  ]))
+  let price_rows = sqlite.query(db, "SELECT digest FROM price_claims ORDER BY symbol, ts_unix, digest")
+  let tx_digests = list.map(tx_rows, fn(r) { r.digest })
+  let price_digests = list.map(price_rows, fn(r) { r.digest })
+  let payload = {
+    account: account,
+    tx_digests: tx_digests,
+    price_digests: price_digests,
+    positions: positions,
+    nav: nav_of(positions)
+  }
+  {
+    state_digest: hash.sha256_text(json.encode(payload)),
+    tx_count: list.len(tx_digests),
+    price_count: list.len(price_digests)
+  }
+}
+
 fn get_position(req) {
   let prefix = "/finance/position/"
   let account = str.slice(req.path, str.len(prefix), str.len(req.path))
   let positions = account_positions(account)
-  ok_json({ account: account, positions: positions, nav: nav_of(positions) })
+  let receipt = state_receipt(account, positions)
+  ok_json({ account: account, positions: positions, nav: nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
 }
 
 fn handle(req) {
