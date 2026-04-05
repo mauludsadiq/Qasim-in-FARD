@@ -8,6 +8,7 @@ import("std/hash")   as hash
 import("std/bytes")  as bytes
 import("std/base64") as b64
 import("std/crypto") as crypto
+import("std/http")   as http
 
 let DB_PATH = "/tmp/qasim_fard.db"
 let db = sqlite.open(DB_PATH)
@@ -126,6 +127,37 @@ fn post_price(req) {
     ok_json({ digest: d })
 }
 
+fn post_live_price(req) {
+  let body = json.decode(req.body)
+  let symbol = require_text(body, "symbol")
+  let venue = require_text(body, "venue")
+  let url = require_text(body, "url")
+
+  if symbol == "" then err_json(400, "missing symbol")
+  else if venue == "" then err_json(400, "missing venue")
+  else if url == "" then err_json(400, "missing url")
+  else
+    let resp = http.get(url) in
+    let src = json.decode(resp.body) in
+    let mid = require_num(src, "mid") in
+    let ts_unix = require_num(src, "ts_unix") in
+    let payload = { symbol: symbol, mid: mid, ts_unix: ts_unix, venue: venue } in
+    let payload_json = json.canonicalize(payload) in
+    let d = hex_digest(payload_json) in
+    let source_body_digest = hash.sha256_text(resp.body) in
+    let _ = sqlite.exec(db, str.concat([
+      "INSERT OR REPLACE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      d, "'", ", '",
+      symbol, "'", ",",
+      str.from(mid), ", '",
+      venue, "'", ",",
+      str.from(ts_unix), ", 'LIVE_HTTP', '",
+      source_body_digest, "'", ", '",
+      payload_json, "')"
+    ])) in
+    ok_json({ digest: d, symbol: symbol, venue: venue, source_url: url, source_body_digest: source_body_digest, mid: mid, ts_unix: ts_unix })
+}
+
 fn latest_price_rows() {
   sqlite.query(db, "SELECT p1.symbol AS symbol, p1.mid AS mid, p1.ts_unix AS ts_unix
                     FROM price_claims p1
@@ -238,6 +270,7 @@ fn handle(req) {
   if req.path == "/health" then health()
   else if req.path == "/finance/ingest/tx" then post_tx(req)
   else if req.path == "/finance/price/claim" then post_price(req)
+  else if req.path == "/finance/live/price" then post_live_price(req)
   else if req.path == "/finance/replay" then replay(req)
   else if str.starts_with(req.path, "/finance/position/") then get_position(req)
   else { status: 404, headers: {}, body: "not found" }
