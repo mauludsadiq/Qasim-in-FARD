@@ -1,0 +1,8 @@
+name = "qasim_fard"
+version = "1.0.0"
+
+[run]
+program = "main.fard"
+
+[test]
+command = "./smoke.sh"
