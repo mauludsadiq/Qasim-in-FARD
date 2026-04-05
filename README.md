@@ -228,6 +228,29 @@ GET /finance/export/ACCT-123
 
 ## Key Guarantees
 
+### End-to-End State Verification (NEW)
+
+Qasim state digests are independently reproducible.
+
+For any exported account state, a client can reconstruct the canonical payload:
+
+- account
+- as_of_ts
+- tx_digests
+- price_digests
+- positions
+- nav
+
+and recompute:
+
+state_digest = sha256(canonical_payload)
+
+A matching digest proves that the returned positions and NAV are exactly the committed state.
+
+---
+
+## Key Guarantees
+
 ### Canonical HTTP Witnessing (NEW)
 
 Qasim now emits deterministic HTTP digests for every response:
