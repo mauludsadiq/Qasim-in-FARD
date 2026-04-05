@@ -1,0 +1,116 @@
+import("std/str") as str
+import("std/list") as list
+import("std/rec") as rec
+import("std/json") as json
+import("std/hash") as hash
+import("std/sqlite") as sqlite
+fn tx_rows_for_account(db, account) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM tx WHERE account='",
+    account,
+    "' ORDER BY ts_unix, digest"
+  ]))
+}
+
+fn tx_rows_for_account_at(db, account, ts_unix_cutoff) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM tx WHERE account='",
+    account,
+    "' AND ts_unix<=",
+    str.from(ts_unix_cutoff),
+    " ORDER BY ts_unix, digest"
+  ]))
+}
+
+fn price_aggregate(req, db, prices_mod, ok_json) {
+  let prefix = "/finance/price/aggregate/"
+  let symbol = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let rows = prices_mod.latest_price_rows(db)
+  ok_json(prices_mod.aggregate_symbol_prices(rows, symbol))
+}
+
+fn get_position(req, db, prices_mod, state_mod, ok_json) {
+  let prefix = "/finance/position/"
+  let account = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let positions = state_mod.positions_from_rows(tx_rows_for_account(db, account), prices_mod.latest_price_rows(db), prices_mod)
+  let receipt = state_mod.state_receipt_from_rows(account, tx_rows_for_account(db, account), prices_mod.latest_price_rows(db), positions, null)
+  ok_json({ account: account, positions: positions, nav: state_mod.nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+}
+
+fn state_at(req, db, prices_mod, state_mod, ok_json, err_json) {
+  let prefix = "/finance/state_at/"
+  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let parts = str.split(rest, "/")
+  let account = if list.len(parts) > 0 then parts[0] else ""
+  let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
+  if account == "" then err_json(400, "missing account")
+  else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
+  else
+    let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
+    let txs = tx_rows_for_account_at(db, account, cutoff) in
+    let prices = prices_mod.price_rows_at(db, cutoff, MAX_PRICE_AGE) in
+    let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
+    let receipt = state_mod.state_receipt_from_rows(account, txs, prices, positions, cutoff) in
+    ok_json({ account: account, as_of_ts: cutoff, positions: positions, nav: state_mod.nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+}
+
+fn export_account(req, db, prices_mod, state_mod, ok_json) {
+  let prefix = "/finance/export/"
+  let account = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let txs = tx_rows_for_account(db, account)
+  let prices = prices_mod.latest_price_rows(db)
+  let positions = state_mod.positions_from_rows(txs, prices, prices_mod)
+  let receipt = state_mod.state_receipt_from_rows(account, txs, prices, positions, null)
+  ok_json({ account: account, txs: txs, prices: prices, positions: positions, nav: state_mod.nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+}
+
+fn export_account_at(req, db, prices_mod, state_mod, ok_json, err_json) {
+  let prefix = "/finance/export_at/"
+  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let parts = str.split(rest, "/")
+  let account = if list.len(parts) > 0 then parts[0] else ""
+  let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
+  if account == "" then err_json(400, "missing account")
+  else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
+  else
+    let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
+    let txs = tx_rows_for_account_at(db, account, cutoff) in
+    let prices = prices_mod.price_rows_at(db, cutoff, MAX_PRICE_AGE) in
+    let positions = state_mod.positions_from_rows(txs, prices, prices_mod) in
+    let receipt = state_mod.state_receipt_from_rows(account, txs, prices, positions, cutoff) in
+    ok_json({ account: account, as_of_ts: cutoff, txs: txs, prices: prices, positions: positions, nav: state_mod.nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+}
+
+fn replay(req, state_mod, ok_json) {
+  let body = json.decode(req.body)
+  let account = if rec.has(body, "account") then rec.get(body, "account") else ""
+  let tx_rows = if rec.has(body, "txs") then rec.get(body, "txs") else []
+  let price_rows = if rec.has(body, "prices") then rec.get(body, "prices") else []
+  let as_of_ts = if rec.has(body, "as_of_ts") then rec.get(body, "as_of_ts") else null
+  let tx_rows2 = if as_of_ts == null then tx_rows else list.filter(tx_rows, fn(r) { r.ts_unix <= as_of_ts })
+  let price_rows2 = if as_of_ts == null then price_rows else list.filter(price_rows, fn(r) { r.ts_unix <= as_of_ts })
+  let positions = state_mod.positions_from_rows(tx_rows2, price_rows2, qasim_prices)
+  let payload = {
+    account: account,
+    as_of_ts: as_of_ts,
+    tx_digests: list.map(tx_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(r.payload_json) }),
+    price_digests: list.map(price_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(r.payload_json) }),
+    positions: positions,
+    nav: state_mod.nav_of(positions)
+  }
+  ok_json({ account: account, as_of_ts: as_of_ts, positions: positions, nav: state_mod.nav_of(positions), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows2), price_count: list.len(price_rows2) })
+}
+
+
+{ tx_rows_for_account: tx_rows_for_account, tx_rows_for_account_at: tx_rows_for_account_at, price_aggregate: price_aggregate, get_position: get_position, state_at: state_at, export_account: export_account, export_account_at: export_account_at, replay: replay }
+{
+  tx_rows_for_account: tx_rows_for_account,
+  tx_rows_for_account_at: tx_rows_for_account_at,
+  price_aggregate: price_aggregate,
+  get_position: get_position,
+  state_at: state_at,
+  export_account: export_account,
+  export_account_at: export_account_at,
+  replay: replay
+}
+

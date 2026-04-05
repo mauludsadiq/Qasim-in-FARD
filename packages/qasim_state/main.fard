@@ -1,0 +1,51 @@
+import("std/str") as str
+import("std/list") as list
+import("std/rec") as rec
+import("std/hash") as hash
+import("std/json") as json
+fn positions_from_rows(tx_rows, price_rows, prices_mod) {
+  let qtys = list.fold(tx_rows, {}, fn(acc, r) {
+    let delta = if r.side == "buy" then r.qty else 0 - r.qty
+    if rec.has(acc, r.instrument) then rec.set(acc, r.instrument, rec.get(acc, r.instrument) + delta)
+    else rec.set(acc, r.instrument, delta)
+  })
+
+  let instruments = rec.keys(qtys)
+
+  list.map(instruments, fn(inst) {
+    let qty = rec.get(qtys, inst)
+    let price = prices_mod.consensus_price(price_rows, str.concat([inst, "/USD"]))
+    let value = if price == null then null else qty * price
+    { instrument: inst, qty: qty, price: price, value: value }
+  })
+}
+
+fn nav_of(positions) {
+  list.fold(positions, 0, fn(acc, p) {
+    if p.value == null then acc else acc + p.value
+  })
+}
+
+fn state_receipt_from_rows(account, tx_rows, price_rows, positions, as_of_ts) {
+  let tx_digests = list.map(tx_rows, fn(r) { r.digest })
+  let price_digests = list.map(price_rows, fn(r) { r.digest })
+  let payload = {
+    account: account,
+    as_of_ts: as_of_ts,
+    tx_digests: tx_digests,
+    price_digests: price_digests,
+    positions: positions,
+    nav: nav_of(positions)
+  }
+  {
+    state_digest: hash.sha256_text(json.encode(payload)),
+    tx_count: list.len(tx_digests),
+    price_count: list.len(price_digests)
+  }
+}
+{
+  positions_from_rows: positions_from_rows,
+  nav_of: nav_of,
+  state_receipt_from_rows: state_receipt_from_rows
+}
+

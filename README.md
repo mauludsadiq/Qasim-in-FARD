@@ -46,6 +46,23 @@ Entire system can be recomputed from:
 
 ## Architecture
 
+### Modular Structure (NEW)
+
+Qasim is no longer organized as a single monolithic main.fard file.
+
+Current structure:
+
+- main.fard                 -> composition root, imports, wiring, server startup
+- packages/qasim_prices    -> price loading, staleness filtering, aggregation, consensus
+- packages/qasim_state     -> positions, NAV, state receipts
+- packages/qasim_http      -> route handlers, request parsing, response shaping
+
+This separation makes pricing, state, and HTTP independently testable and reduces hidden coupling.
+
+---
+
+## Architecture
+
 ### 1. Ingestion
 
 #### Transactions

@@ -1,0 +1,189 @@
+import("std/net")    as net
+import("std/sqlite") as sqlite
+import("std/json")   as json
+import("std/str")    as str
+import("std/list")   as list
+import("std/rec")    as rec
+import("std/hash")   as hash
+import("std/bytes")  as bytes
+import("std/base64") as b64
+import("std/crypto") as crypto
+
+let DB_PATH = "/tmp/qasim_fard.db"
+let db = sqlite.open(DB_PATH)
+
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS tx (
+  digest TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
+  account TEXT NOT NULL,
+  instrument TEXT NOT NULL,
+  side TEXT NOT NULL,
+  qty REAL NOT NULL,
+  price REAL NOT NULL,
+  ts_unix INTEGER NOT NULL,
+  issuer_pk_hex TEXT NOT NULL,
+  sig_b64 TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+)")
+
+let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_tx_account ON tx(account)")
+
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS price_claims (
+  digest TEXT PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  mid REAL NOT NULL,
+  venue TEXT NOT NULL,
+  ts_unix INTEGER NOT NULL,
+  issuer_pk_hex TEXT NOT NULL,
+  sig_b64 TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+)")
+
+let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_price_symbol_ts ON price_claims(symbol, ts_unix)")
+
+fn ok_json(v) {
+  { status: 200, headers: { "Content-Type": "application/json" }, body: json.encode(v) }
+}
+
+fn err_json(status, msg) {
+  { status: status, headers: { "Content-Type": "application/json" }, body: json.encode({ ok: false, error: msg }) }
+}
+
+fn health() {
+  ok_json({ status: "ok" })
+}
+
+fn hex_digest(payload_json) {
+  hash.sha256_text(payload_json)
+}
+
+fn verify_payload(pk_hex, sig_b64, payload_json) {
+  let msg_hex = bytes.to_hex(bytes.of_str(payload_json))
+  let sig_hex = bytes.to_hex(b64.decode(sig_b64))
+  crypto.ed25519_verify(pk_hex, msg_hex, sig_hex)
+}
+
+fn require_text(v, k) {
+  if rec.has(v, k) then rec.get(v, k) else ""
+}
+
+fn require_num(v, k) {
+  if rec.has(v, k) then rec.get(v, k) else 0
+}
+
+fn post_tx(req) {
+  let tx = json.decode(req.body)
+  let payload_json = require_text(tx, "payload_json")
+  let issuer_pk_hex = require_text(tx, "issuer_pk_hex")
+  let sig_b64 = require_text(tx, "sig_b64")
+
+  if payload_json == "" then err_json(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json(400, "missing sig_b64")
+  else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else
+    let d = hex_digest(payload_json) in
+    let _ = sqlite.exec(db, str.concat([
+      "INSERT OR REPLACE INTO tx (digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      d, "','",
+      require_text(tx, "id"), "','",
+      require_text(tx, "account"), "','",
+      require_text(tx, "instrument"), "','",
+      require_text(tx, "side"), "',",
+      str.from(require_num(tx, "qty")), ",",
+      str.from(require_num(tx, "price")), ",",
+      str.from(require_num(tx, "ts_unix")), ",'",
+      issuer_pk_hex, "','",
+      sig_b64, "','",
+      payload_json, "')"
+    ])) in
+    ok_json({ digest: d })
+}
+
+fn post_price(req) {
+  let p = json.decode(req.body)
+  let payload_json = require_text(p, "payload_json")
+  let issuer_pk_hex = require_text(p, "issuer_pk_hex")
+  let sig_b64 = require_text(p, "sig_b64")
+
+  if payload_json == "" then err_json(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json(400, "missing sig_b64")
+  else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else
+    let d = hex_digest(payload_json) in
+    let _ = sqlite.exec(db, str.concat([
+      "INSERT OR REPLACE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      d, "','",
+      require_text(p, "symbol"), "',",
+      str.from(require_num(p, "mid")), ",'",
+      require_text(p, "venue"), "',",
+      str.from(require_num(p, "ts_unix")), ",'",
+      issuer_pk_hex, "','",
+      sig_b64, "','",
+      payload_json, "')"
+    ])) in
+    ok_json({ digest: d })
+}
+
+fn latest_price_rows() {
+  sqlite.query(db, "SELECT p1.symbol AS symbol, p1.mid AS mid, p1.ts_unix AS ts_unix
+                    FROM price_claims p1
+                    JOIN (
+                      SELECT symbol, MAX(ts_unix) AS max_ts
+                      FROM price_claims
+                      GROUP BY symbol
+                    ) p2
+                    ON p1.symbol = p2.symbol AND p1.ts_unix = p2.max_ts
+                    ORDER BY p1.symbol")
+}
+
+fn find_price(prices, symbol) {
+  let hit = list.find(prices, fn(r) { r.symbol == symbol })
+  if rec.has(hit, "some") then hit.some.mid else null
+}
+
+fn account_positions(account) {
+  let rows = sqlite.query(db, str.concat([
+    "SELECT instrument, side, qty FROM tx WHERE account='", account, "' ORDER BY instrument, ts_unix"
+  ]))
+
+  let qtys = list.fold(rows, {}, fn(acc, r) {
+    let delta = if r.side == "buy" then r.qty else 0 - r.qty
+    if rec.has(acc, r.instrument) then rec.set(acc, r.instrument, rec.get(acc, r.instrument) + delta)
+    else rec.set(acc, r.instrument, delta)
+  })
+
+  let prices = latest_price_rows()
+  let instruments = rec.keys(qtys)
+
+  list.map(instruments, fn(inst) {
+    let qty = rec.get(qtys, inst)
+    let price = find_price(prices, str.concat([inst, "/USD"]))
+    let value = if price == null then null else qty * price
+    { instrument: inst, qty: qty, price: price, value: value }
+  })
+}
+
+fn nav_of(positions) {
+  list.fold(positions, 0, fn(acc, p) {
+    if p.value == null then acc else acc + p.value
+  })
+}
+
+fn get_position(req) {
+  let prefix = "/finance/position/"
+  let account = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let positions = account_positions(account)
+  ok_json({ account: account, positions: positions, nav: nav_of(positions) })
+}
+
+fn handle(req) {
+  if req.path == "/health" then health()
+  else if req.path == "/finance/ingest/tx" then post_tx(req)
+  else if req.path == "/finance/price/claim" then post_price(req)
+  else if str.starts_with(req.path, "/finance/position/") then get_position(req)
+  else { status: 404, headers: {}, body: "not found" }
+}
+
+let _ = net.serve(9801, fn(req) { handle(req) })

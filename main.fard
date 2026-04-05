@@ -9,8 +9,12 @@ import("std/bytes")  as bytes
 import("std/base64") as b64
 import("std/crypto") as crypto
 import("std/http")   as http
+import("./packages/qasim_prices/main") as qasim_prices
+import("./packages/qasim_state/main") as qasim_state
+import("./packages/qasim_http/main") as qasim_http
 
 let DB_PATH = "/tmp/qasim_fard.db"
+let MAX_PRICE_AGE = 300
 let db = sqlite.open(DB_PATH)
 
 let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS tx (
@@ -213,6 +217,15 @@ fn latest_price_rows() {
                     ORDER BY symbol, ts_unix, digest")
 }
 
+fn price_rows_at(ts_unix_cutoff) {
+  let rows = sqlite.query(db, str.concat([
+    "SELECT symbol,mid,venue,ts_unix,digest,issuer_pk_hex,sig_b64,payload_json FROM price_claims WHERE ts_unix<=",
+    str.from(ts_unix_cutoff),
+    " ORDER BY symbol, ts_unix, digest"
+  ]))
+  list.filter(rows, fn(r) { (ts_unix_cutoff - r.ts_unix) <= MAX_PRICE_AGE })
+}
+
 fn aggregate_symbol_prices(price_rows, symbol) {
   let rows = list.filter(price_rows, fn(r) { r.symbol == symbol })
   let values = list.map(rows, fn(r) { r.mid })
@@ -240,36 +253,26 @@ fn price_aggregate(req) {
   ok_json(aggregate_symbol_prices(rows, symbol))
 }
 
+fn tx_rows_for_account(account) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM tx WHERE account='",
+    account,
+    "' ORDER BY ts_unix, digest"
+  ]))
+}
+
+fn tx_rows_for_account_at(account, ts_unix_cutoff) {
+  sqlite.query(db, str.concat([
+    "SELECT digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM tx WHERE account='",
+    account,
+    "' AND ts_unix<=",
+    str.from(ts_unix_cutoff),
+    " ORDER BY ts_unix, digest"
+  ]))
+}
+
 fn find_price(prices, symbol) {
   consensus_price(prices, symbol)
-}
-
-fn account_positions(account) {
-  let rows = sqlite.query(db, str.concat([
-    "SELECT instrument, side, qty FROM tx WHERE account='", account, "' ORDER BY instrument, ts_unix"
-  ]))
-
-  let qtys = list.fold(rows, {}, fn(acc, r) {
-    let delta = if r.side == "buy" then r.qty else 0 - r.qty
-    if rec.has(acc, r.instrument) then rec.set(acc, r.instrument, rec.get(acc, r.instrument) + delta)
-    else rec.set(acc, r.instrument, delta)
-  })
-
-  let prices = latest_price_rows()
-  let instruments = rec.keys(qtys)
-
-  list.map(instruments, fn(inst) {
-    let qty = rec.get(qtys, inst)
-    let price = find_price(prices, str.concat([inst, "/USD"]))
-    let value = if price == null then null else qty * price
-    { instrument: inst, qty: qty, price: price, value: value }
-  })
-}
-
-fn nav_of(positions) {
-  list.fold(positions, 0, fn(acc, p) {
-    if p.value == null then acc else acc + p.value
-  })
 }
 
 fn positions_from_rows(tx_rows, price_rows) {
@@ -289,15 +292,26 @@ fn positions_from_rows(tx_rows, price_rows) {
   })
 }
 
-fn state_receipt(account, positions) {
-  let tx_rows = sqlite.query(db, str.concat([
-    "SELECT digest FROM tx WHERE account='", account, "' ORDER BY ts_unix, digest"
-  ]))
-  let price_rows = sqlite.query(db, "SELECT digest FROM price_claims ORDER BY symbol, ts_unix, digest")
+fn account_positions(account) {
+  positions_from_rows(tx_rows_for_account(account), latest_price_rows())
+}
+
+fn account_positions_at(account, ts_unix_cutoff) {
+  positions_from_rows(tx_rows_for_account_at(account, ts_unix_cutoff), price_rows_at(ts_unix_cutoff))
+}
+
+fn nav_of(positions) {
+  list.fold(positions, 0, fn(acc, p) {
+    if p.value == null then acc else acc + p.value
+  })
+}
+
+fn state_receipt_from_rows(account, tx_rows, price_rows, positions, as_of_ts) {
   let tx_digests = list.map(tx_rows, fn(r) { r.digest })
   let price_digests = list.map(price_rows, fn(r) { r.digest })
   let payload = {
     account: account,
+    as_of_ts: as_of_ts,
     tx_digests: tx_digests,
     price_digests: price_digests,
     positions: positions,
@@ -310,20 +324,32 @@ fn state_receipt(account, positions) {
   }
 }
 
+fn state_receipt(account, positions) {
+  state_receipt_from_rows(account, tx_rows_for_account(account), latest_price_rows(), positions, null)
+}
+
+fn state_receipt_at(account, ts_unix_cutoff, positions) {
+  state_receipt_from_rows(account, tx_rows_for_account_at(account, ts_unix_cutoff), price_rows_at(ts_unix_cutoff), positions, ts_unix_cutoff)
+}
+
 fn replay(req) {
   let body = json.decode(req.body)
   let account = if rec.has(body, "account") then rec.get(body, "account") else ""
   let tx_rows = if rec.has(body, "txs") then rec.get(body, "txs") else []
   let price_rows = if rec.has(body, "prices") then rec.get(body, "prices") else []
-  let positions = positions_from_rows(tx_rows, price_rows)
+  let as_of_ts = if rec.has(body, "as_of_ts") then rec.get(body, "as_of_ts") else null
+  let tx_rows2 = if as_of_ts == null then tx_rows else list.filter(tx_rows, fn(r) { r.ts_unix <= as_of_ts })
+  let price_rows2 = if as_of_ts == null then price_rows else list.filter(price_rows, fn(r) { r.ts_unix <= as_of_ts })
+  let positions = positions_from_rows(tx_rows2, price_rows2)
   let payload = {
     account: account,
-    tx_digests: list.map(tx_rows, fn(r) { if rec.has(r, "digest") then r.digest else hex_digest(r.payload_json) }),
-    price_digests: list.map(price_rows, fn(r) { if rec.has(r, "digest") then r.digest else hex_digest(r.payload_json) }),
+    as_of_ts: as_of_ts,
+    tx_digests: list.map(tx_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hex_digest(r.payload_json) }),
+    price_digests: list.map(price_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hex_digest(r.payload_json) }),
     positions: positions,
     nav: nav_of(positions)
   }
-  ok_json({ account: account, positions: positions, nav: nav_of(positions), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows), price_count: list.len(price_rows) })
+  ok_json({ account: account, as_of_ts: as_of_ts, positions: positions, nav: nav_of(positions), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows2), price_count: list.len(price_rows2) })
 }
 
 fn get_position(req) {
@@ -334,16 +360,47 @@ fn get_position(req) {
   ok_json({ account: account, positions: positions, nav: nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
 }
 
+fn state_at(req) {
+  let prefix = "/finance/state_at/"
+  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let hit = list.find(str.split(rest, "/"), fn(_) { true })
+  let parts = str.split(rest, "/")
+  let account = if list.len(parts) > 0 then parts[0] else ""
+  let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
+  if account == "" then err_json(400, "missing account")
+  else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
+  else
+    let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
+    let positions = account_positions_at(account, cutoff) in
+    let receipt = state_receipt_at(account, cutoff, positions) in
+    ok_json({ account: account, as_of_ts: cutoff, positions: positions, nav: nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+}
+
 fn export_account(req) {
   let prefix = "/finance/export/"
   let account = str.slice(req.path, str.len(prefix), str.len(req.path))
-  let txs = sqlite.query(db, str.concat([
-    "SELECT digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM tx WHERE account='", account, "' ORDER BY ts_unix, digest"
-  ]))
-  let prices = sqlite.query(db, "SELECT digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM price_claims ORDER BY symbol, ts_unix, digest")
+  let txs = tx_rows_for_account(account)
+  let prices = latest_price_rows()
   let positions = account_positions(account)
   let receipt = state_receipt(account, positions)
   ok_json({ account: account, txs: txs, prices: prices, positions: positions, nav: nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
+}
+
+fn export_account_at(req) {
+  let prefix = "/finance/export_at/"
+  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let parts = str.split(rest, "/")
+  let account = if list.len(parts) > 0 then parts[0] else ""
+  let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
+  if account == "" then err_json(400, "missing account")
+  else if ts_unix_cutoff == "" then err_json(400, "missing ts_unix")
+  else
+    let cutoff = json.decode(str.concat([ts_unix_cutoff])) in
+    let txs = tx_rows_for_account_at(account, cutoff) in
+    let prices = price_rows_at(cutoff) in
+    let positions = positions_from_rows(txs, prices) in
+    let receipt = state_receipt_at(account, cutoff, positions) in
+    ok_json({ account: account, as_of_ts: cutoff, txs: txs, prices: prices, positions: positions, nav: nav_of(positions), state_digest: receipt.state_digest, tx_count: receipt.tx_count, price_count: receipt.price_count })
 }
 
 fn handle(req) {
@@ -351,10 +408,12 @@ fn handle(req) {
   else if req.path == "/finance/ingest/tx" then post_tx(req)
   else if req.path == "/finance/price/claim" then post_price(req)
   else if req.path == "/finance/live/price" then post_live_price(req)
-  else if req.path == "/finance/replay" then replay(req)
-  else if str.starts_with(req.path, "/finance/price/aggregate/") then price_aggregate(req)
-  else if str.starts_with(req.path, "/finance/export/") then export_account(req)
-  else if str.starts_with(req.path, "/finance/position/") then get_position(req)
+  else if req.path == "/finance/replay" then qasim_http.replay(req, qasim_state, ok_json)
+  else if str.starts_with(req.path, "/finance/price/aggregate/") then qasim_http.price_aggregate(req, db, qasim_prices, ok_json)
+  else if str.starts_with(req.path, "/finance/export_at/") then qasim_http.export_account_at(req, db, qasim_prices, qasim_state, ok_json, err_json)
+  else if str.starts_with(req.path, "/finance/export/") then qasim_http.export_account(req, db, qasim_prices, qasim_state, ok_json)
+  else if str.starts_with(req.path, "/finance/state_at/") then qasim_http.state_at(req, db, qasim_prices, qasim_state, ok_json, err_json)
+  else if str.starts_with(req.path, "/finance/position/") then qasim_http.get_position(req, db, qasim_prices, qasim_state, ok_json)
   else { status: 404, headers: {}, body: "not found" }
 }
 

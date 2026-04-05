@@ -1,0 +1,49 @@
+import("std/sqlite") as sqlite
+import("std/str") as str
+import("std/list") as list
+import("std/rec") as rec
+fn latest_price_rows(db) {
+  sqlite.query(db, "SELECT symbol,mid,venue,ts_unix,digest,issuer_pk_hex,sig_b64,payload_json
+                    FROM price_claims
+                    ORDER BY symbol, ts_unix, digest")
+}
+
+fn price_rows_at(db, ts_unix_cutoff, max_price_age) {
+  let rows = sqlite.query(db, str.concat([
+    "SELECT symbol,mid,venue,ts_unix,digest,issuer_pk_hex,sig_b64,payload_json FROM price_claims WHERE ts_unix<=",
+    str.from(ts_unix_cutoff),
+    " ORDER BY symbol, ts_unix, digest"
+  ]))
+  list.filter(rows, fn(r) { (ts_unix_cutoff - r.ts_unix) <= max_price_age })
+}
+
+fn aggregate_symbol_prices(price_rows, symbol) {
+  let rows = list.filter(price_rows, fn(r) { r.symbol == symbol })
+  let values = list.map(rows, fn(r) { r.mid })
+  let n = list.len(values)
+  if n == 0 then { symbol: symbol, median: null, mean: null, variance: null, outliers: [], sources: [] }
+  else let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in let mean = sum / n in let variance = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) / n in let threshold = variance * 4 in let outliers = list.filter(rows, fn(r) { let d = r.mid - mean in (d * d) > threshold }) in { symbol: symbol, median: mean, mean: mean, variance: variance, outliers: outliers, sources: rows }
+}
+
+fn aggregate_all_prices(price_rows) {
+  let symbols = rec.keys(list.fold(price_rows, {}, fn(acc, r) {
+    if rec.has(acc, r.symbol) then acc else rec.set(acc, r.symbol, true)
+  }))
+  list.map(symbols, fn(sym) { aggregate_symbol_prices(price_rows, sym) })
+}
+
+fn consensus_price(price_rows, symbol) {
+  let agg = aggregate_symbol_prices(price_rows, symbol)
+  agg.median
+}
+
+
+{ latest_price_rows: latest_price_rows, price_rows_at: price_rows_at, aggregate_symbol_prices: aggregate_symbol_prices, aggregate_all_prices: aggregate_all_prices, consensus_price: consensus_price }
+{
+  latest_price_rows: latest_price_rows,
+  price_rows_at: price_rows_at,
+  aggregate_symbol_prices: aggregate_symbol_prices,
+  aggregate_all_prices: aggregate_all_prices,
+  consensus_price: consensus_price
+}
+
