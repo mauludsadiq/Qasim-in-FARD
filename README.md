@@ -268,6 +268,50 @@ This is a verifiable financial system.
 
 ## Time-Indexed State (NEW)
 
+### Price Staleness (NEW)
+
+Qasim enforces an explicit freshness constraint on price data.
+
+#### Parameter
+
+MAX_PRICE_AGE = 300  (seconds)
+
+#### Rule
+
+A price is considered valid at time t only if:
+
+- ts_unix ≤ t
+- (t - ts_unix) ≤ MAX_PRICE_AGE
+
+Otherwise the price is discarded.
+
+#### Effect
+
+- Stale prices are not used in valuation
+- Positions remain, but value becomes null
+- NAV excludes assets with stale pricing
+
+#### Example
+
+At time t = 1731000500
+
+Latest price ts = 1731000120
+
+Δ = 380 > 300 → price is stale
+
+Result:
+
+qty = 6
+price = null
+value = null
+nav = 0
+
+This ensures economic correctness and prevents outdated data from influencing state.
+
+---
+
+## Time-Indexed State (NEW)
+
 Qasim now supports deterministic state evaluation at any time t.
 
 ### Endpoint
