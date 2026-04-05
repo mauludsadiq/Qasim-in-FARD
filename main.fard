@@ -127,11 +127,24 @@ fn post_price(req) {
     ok_json({ digest: d })
 }
 
+fn adapt_price(feed_type, src) {
+  if feed_type == "simple_json" then
+    { ok: true, mid: require_num(src, "mid"), ts_unix: require_num(src, "ts_unix") }
+  else if feed_type == "coindesk" then
+    if rec.has(src, "bpi") && rec.has(src.bpi, "USD") then
+      { ok: true, mid: require_num(src.bpi.USD, "rate_float"), ts_unix: 0 }
+    else
+      { ok: false, error: "coindesk adapter missing bpi.USD.rate_float" }
+  else
+    { ok: false, error: str.concat(["unknown feed_type: ", feed_type]) }
+}
+
 fn post_live_price(req) {
   let body = json.decode(req.body)
   let symbol = require_text(body, "symbol")
   let venue = require_text(body, "venue")
   let url = require_text(body, "url")
+  let feed_type = if rec.has(body, "feed_type") then rec.get(body, "feed_type") else "simple_json"
 
   if symbol == "" then err_json(400, "missing symbol")
   else if venue == "" then err_json(400, "missing venue")
@@ -139,23 +152,28 @@ fn post_live_price(req) {
   else
     let resp = http.get(url) in
     let src = json.decode(resp.body) in
-    let mid = require_num(src, "mid") in
-    let ts_unix = require_num(src, "ts_unix") in
-    let payload = { symbol: symbol, mid: mid, ts_unix: ts_unix, venue: venue } in
-    let payload_json = json.canonicalize(payload) in
-    let d = hex_digest(payload_json) in
-    let source_body_digest = hash.sha256_text(resp.body) in
-    let _ = sqlite.exec(db, str.concat([
-      "INSERT OR REPLACE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
-      d, "'", ", '",
-      symbol, "'", ",",
-      str.from(mid), ", '",
-      venue, "'", ",",
-      str.from(ts_unix), ", 'LIVE_HTTP', '",
-      source_body_digest, "'", ", '",
-      payload_json, "')"
-    ])) in
-    ok_json({ digest: d, symbol: symbol, venue: venue, source_url: url, source_body_digest: source_body_digest, mid: mid, ts_unix: ts_unix })
+    let adapted = adapt_price(feed_type, src) in
+    if !adapted.ok then err_json(400, adapted.error)
+    else if adapted.mid == 0 then err_json(400, "adapter produced mid=0")
+    else if adapted.ts_unix == 0 && feed_type == "simple_json" then err_json(400, "adapter produced ts_unix=0")
+    else
+      let mid = adapted.mid in
+      let ts_unix = adapted.ts_unix in
+      let payload = { symbol: symbol, mid: mid, ts_unix: ts_unix, venue: venue } in
+      let payload_json = json.canonicalize(payload) in
+      let d = hex_digest(payload_json) in
+      let source_body_digest = hash.sha256_text(resp.body) in
+      let _ = sqlite.exec(db, str.concat([
+        "INSERT OR REPLACE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+        d, "'", ", '",
+        symbol, "'", ",",
+        str.from(mid), ", '",
+        venue, "'", ",",
+        str.from(ts_unix), ", 'LIVE_HTTP', '",
+        source_body_digest, "'", ", '",
+        payload_json, "')"
+      ])) in
+      ok_json({ digest: d, symbol: symbol, venue: venue, feed_type: feed_type, source_url: url, source_body_digest: source_body_digest, mid: mid, ts_unix: ts_unix })
 }
 
 fn latest_price_rows() {
