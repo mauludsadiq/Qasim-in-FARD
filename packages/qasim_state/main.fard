@@ -350,6 +350,62 @@ fn realized_pnl_of(fill_rows, instrument) {
   result.realized
 }
 
+
+fn check_rule(rule, positions, risk_state) {
+  let rule_type = if rec.has(rule, "rule_type") then rule.rule_type else "" in
+  let params = if rec.has(rule, "params") then rule.params else {} in
+  if rule_type == "max_position_size" then
+    let instrument = if rec.has(params, "instrument") then params.instrument else "" in
+    let max_value = if rec.has(params, "max_value") then params.max_value else 0 in
+    let hit = list.find(positions, fn(p) { p.instrument == instrument }) in
+    let pos = if rec.has(hit, "some") then hit.some else null in
+    let value = if pos == null then 0 else if pos.value == null then 0 else pos.value in
+    let abs_value = if value < 0 then 0 - value else value in
+    if abs_value > max_value then
+      { passed: false, rule_type: rule_type, breach: str.concat(["position ", instrument, " value ", str.from(abs_value), " exceeds max ", str.from(max_value)]) }
+    else { passed: true, rule_type: rule_type, breach: null }
+  else if rule_type == "max_concentration" then
+    let max_pct = if rec.has(params, "max_pct") then params.max_pct else 100 in
+    let concentration = if rec.has(risk_state, "concentration") then risk_state.concentration else 0 in
+    let pct = if concentration == null then 0 else concentration * 100 in
+    if pct > max_pct then
+      { passed: false, rule_type: rule_type, breach: str.concat(["concentration ", str.from(pct), "% exceeds max ", str.from(max_pct), "%"]) }
+    else { passed: true, rule_type: rule_type, breach: null }
+  else if rule_type == "max_leverage" then
+    let max_lev = if rec.has(params, "max_leverage") then params.max_leverage else 0 in
+    let leverage = if rec.has(risk_state, "leverage") then risk_state.leverage else 0 in
+    let lev = if leverage == null then 0 else leverage in
+    if lev > max_lev then
+      { passed: false, rule_type: rule_type, breach: str.concat(["leverage ", str.from(lev), " exceeds max ", str.from(max_lev)]) }
+    else { passed: true, rule_type: rule_type, breach: null }
+  else if rule_type == "max_gross_exposure" then
+    let max_exp = if rec.has(params, "max_value") then params.max_value else 0 in
+    let gross = if rec.has(risk_state, "gross_exposure") then risk_state.gross_exposure else 0 in
+    if gross > max_exp then
+      { passed: false, rule_type: rule_type, breach: str.concat(["gross exposure ", str.from(gross), " exceeds max ", str.from(max_exp)]) }
+    else { passed: true, rule_type: rule_type, breach: null }
+  else if rule_type == "instrument_blacklist" then
+    let blacklist = if rec.has(params, "instruments") then params.instruments else [] in
+    let breaching = list.filter(positions, fn(p) {
+      list.find(blacklist, fn(b) { b == p.instrument }) != null &&
+      rec.has(list.find(blacklist, fn(b) { b == p.instrument }), "some")
+    }) in
+    if list.len(breaching) > 0 then
+      { passed: false, rule_type: rule_type, breach: str.concat(["blacklisted instruments held: ", list.fold(breaching, "", fn(acc, p) { str.concat([acc, " ", p.instrument]) })]) }
+    else { passed: true, rule_type: rule_type, breach: null }
+  else
+    { passed: true, rule_type: rule_type, breach: null }
+}
+
+fn evaluate_compliance(rules, positions, risk_state) {
+  let results = list.map(rules, fn(rule) {
+    let r = check_rule(rule, positions, risk_state) in
+    { rule_id: (if rec.has(rule, "rule_id") then rule.rule_id else ""), passed: r.passed, rule_type: r.rule_type, breach: r.breach }
+  })
+  let breaches = list.filter(results, fn(r) { !r.passed })
+  { passed: list.len(breaches) == 0, results: results, breach_count: list.len(breaches), breaches: breaches }
+}
+
 fn attribution_of(fill_rows, positions, beginning_nav) {
   let items = list.map(positions, fn(p) {
     let avg_cost = cost_basis_of(fill_rows, p.instrument) in
@@ -467,6 +523,8 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   cost_basis_of: cost_basis_of,
   realized_pnl_of: realized_pnl_of,
   attribution_of: attribution_of,
+  check_rule: check_rule,
+  evaluate_compliance: evaluate_compliance,
   positions_from_fills_with_meta: positions_from_fills_with_meta,
   cash_balance_of: cash_balance_of,
   nav_of: nav_of,

@@ -28,6 +28,16 @@ fn current_ts(db) {
   rows[0].ts
 }
 
+fn compliance_rule_rows(db, account) {
+  list.map(
+    sqlite.query(db, str.concat([
+      "SELECT payload_json FROM object_store WHERE object_type='compliance_rule' AND (account='",
+      account, "' OR account='*')"
+    ])),
+    fn(r) { json.decode(r.payload_json) }
+  )
+}
+
 fn fill_rows_for_account(db, account) {
   list.map(sqlite.query(db, str.concat([
     "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='fill' AND account='",
@@ -176,6 +186,58 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   ok_json({ account: account, as_of_ts: now, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
+
+
+fn post_compliance_rule_h(req, ctx) {
+  let db = ctx.db in
+  let body = json.decode(req.body) in
+  let payload_json = if rec.has(body, "payload_json") then rec.get(body, "payload_json") else "" in
+  let issuer_pk_hex = if rec.has(body, "issuer_pk_hex") then rec.get(body, "issuer_pk_hex") else "" in
+  let sig_b64 = if rec.has(body, "sig_b64") then rec.get(body, "sig_b64") else "" in
+  if payload_json == "" then err_json_h(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
+  else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
+  else
+    let p = json.decode(payload_json) in
+    let rule_id = if rec.has(p, "rule_id") then p.rule_id else "" in
+    let account = if rec.has(p, "account") then p.account else "" in
+    if rule_id == "" then err_json_h(400, "missing rule_id")
+    else if account == "" then err_json_h(400, "missing account")
+    else
+      let obj = ctx.qasim_objects.compliance_rule(
+        rule_id, account,
+        (if rec.has(p, "rule_type") then p.rule_type else ""),
+        (if rec.has(p, "params") then p.params else {}),
+        issuer_pk_hex, sig_b64
+      ) in
+      let _ = sqlite.exec(db, str.concat([
+        "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+        obj.digest, "','compliance_rule','", account, "',NULL,0,'",
+        issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
+      ])) in
+      ok_json_h({ object_type: obj.object_type, digest: obj.digest, rule_id: rule_id, account: account })
+}
+
+fn compliance_check_h(req, ctx) {
+  let db = ctx.db in
+  let prefix = "/finance/compliance/" in
+  let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
+  if account == "" then err_json_h(400, "missing account")
+  else
+    let fills = fill_rows_for_account(db, account) in
+    let cash = cash_rows_for_account(db, account) in
+    let now = current_ts(db) in
+    let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
+    let inst_rows = instrument_rows(db) in
+    let ca_rows = corporate_action_rows(db) in
+    let rules = compliance_rule_rows(db, account) in
+    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+    let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
+    let risk_state = ctx.qasim_state.risk_state_of(positions, cash_balance) in
+    let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state) in
+    ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), compliance: compliance })
+}
 
 fn attribution_h(req, ctx) {
   let db = ctx.db in
@@ -862,6 +924,7 @@ fn verify_chain_h(ctx) {
 
 fn handle(req, ctx) {
   if req.path == "/health" then health_h()
+  else if req.path == "/finance/ingest/compliance_rule" then (if req.body == "" then err_json_h(400, "request body required") else post_compliance_rule_h(req, ctx))
   else if req.path == "/finance/ingest/batch" then (if req.body == "" then err_json_h(400, "request body required") else post_batch_h(req, ctx))
   else if req.path == "/finance/ingest/instrument" then (if req.body == "" then err_json_h(400, "request body required") else post_instrument_h(req, ctx))
   else if req.path == "/finance/ingest/corporate_action" then (if req.body == "" then err_json_h(400, "request body required") else post_corporate_action_h(req, ctx))
@@ -871,6 +934,7 @@ fn handle(req, ctx) {
   else if req.path == "/finance/ingest/fill" then (if req.body == "" then err_json_h(400, "request body required") else post_fill_h(req, ctx))
   else if req.path == "/finance/price/claim" then (if req.body == "" then err_json_h(400, "request body required") else post_price_h(req, ctx))
   else if req.path == "/finance/live/price" then (if req.body == "" then err_json_h(400, "request body required") else post_live_price_h(req, ctx))
+  else if str.starts_with(req.path, "/finance/compliance/") then compliance_check_h(req, ctx)
   else if str.starts_with(req.path, "/finance/attribution/") then attribution_h(req, ctx)
   else if req.path == "/finance/pretrade" then (if req.body == "" then err_json_h(400, "request body required") else pretrade_h(req, ctx))
   else if req.path == "/finance/chain/verify" then verify_chain_h(ctx)

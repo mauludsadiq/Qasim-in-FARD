@@ -122,6 +122,16 @@ fn collateral(collateral_id, account, counterparty_id, collateral_type, amount, 
   }, issuer_pk_hex, sig_b64)
 }
 
+
+fn compliance_rule(rule_id, account, rule_type, params, issuer_pk_hex, sig_b64) {
+  signed_object("compliance_rule", {
+    rule_id: rule_id,
+    account: account,
+    rule_type: rule_type,
+    params: params
+  }, issuer_pk_hex, sig_b64)
+}
+
 {
   canonical_digest: canonical_digest,
   signed_object: signed_object,
@@ -133,5 +143,6 @@ fn collateral(collateral_id, account, counterparty_id, collateral_type, amount, 
   corporate_action: corporate_action,
   counterparty: counterparty,
   portfolio: portfolio,
-  collateral: collateral
+  collateral: collateral,
+  compliance_rule: compliance_rule
 }
