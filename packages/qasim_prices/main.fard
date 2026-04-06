@@ -92,6 +92,7 @@ fn consensus_price(price_rows, symbol) {
 
 {
   latest_price_rows: latest_price_rows,
+  all_price_rows: latest_price_rows,
   price_rows_at: price_rows_at,
   aggregate_symbol_prices: aggregate_symbol_prices,
   aggregate_all_prices: aggregate_all_prices,

@@ -152,6 +152,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let cash = cash_rows_for_account(db, account)
   let now = current_ts(db)
   let prices = prices_mod.price_rows_at(db, now, max_price_age)
+  let all_prices = prices_mod.all_price_rows(db)
   let inst_rows = instrument_rows(db)
   let ca_rows = corporate_action_rows(db)
   let fill_key = list.fold(fills, "", fn(acc, r) { str.concat([acc, r.digest]) })
@@ -170,7 +171,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let dividend_cash = state_mod.dividend_cash_of(fills, ca_rows, now)
   let fx_rates = state_mod.fx_rates_from_prices(prices, prices_mod)
   let nav_usd = state_mod.nav_usd_of(positions, cash, fx_rates)
-  let risk_state_var = state_mod.risk_state_with_var(positions, state_mod.cash_balance_of(cash), prices)
+  let risk_state_var = state_mod.risk_state_with_var(positions, state_mod.cash_balance_of(cash), all_prices)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, now)
   ok_json({ account: account, as_of_ts: now, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
@@ -577,14 +578,14 @@ fn post_price_h(req, ctx) {
       (if rec.has(pp, "symbol") then rec.get(pp, "symbol") else ""), "',",
       str.from(if rec.has(pp, "mid") then rec.get(pp, "mid") else 0), ",'",
       (if rec.has(pp, "venue") then rec.get(pp, "venue") else ""), "',",
-      str.from(if rec.has(p, "ts_unix") then rec.get(p, "ts_unix") else 0), ",'",
+      str.from(if rec.has(pp, "ts_unix") then rec.get(pp, "ts_unix") else 0), ",'",
       issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
     ])) in
     let _ = sqlite.exec(db, str.concat([
       "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES (",
       "'", d, "','price_claim',NULL,'",
       (if rec.has(pp, "symbol") then rec.get(pp, "symbol") else ""), "',",
-      str.from(if rec.has(p, "ts_unix") then rec.get(p, "ts_unix") else 0), ",'",
+      str.from(if rec.has(pp, "ts_unix") then rec.get(pp, "ts_unix") else 0), ",'",
       issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
     ])) in
     ok_json_h({ digest: d })
