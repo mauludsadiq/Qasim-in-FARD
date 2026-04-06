@@ -4,7 +4,37 @@ import("std/rec") as rec
 import("std/hash") as hash
 import("std/json") as json
 
+fn value_position(qty, price, meta) {
+  if price == null then null
+  else if meta == null then qty * price
+  else
+    let asset_class = if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    let multiplier = if rec.has(meta, "multiplier") then meta.multiplier else 1 in
+    let currency = if rec.has(meta, "currency") then meta.currency else "USD" in
+    if asset_class == "equity" then qty * price * multiplier
+    else if asset_class == "future" then qty * price * multiplier
+    else if asset_class == "option" then qty * price * multiplier
+    else if asset_class == "fixed_income" then qty * (price / 100) * multiplier
+    else if asset_class == "fx" then qty * price
+    else qty * price * multiplier
+}
+
+fn price_symbol_for(inst, meta) {
+  if meta == null then str.concat([inst, "/USD"])
+  else
+    let asset_class = if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    let symbol = if rec.has(meta, "symbol") then meta.symbol else inst in
+    let currency = if rec.has(meta, "currency") then meta.currency else "USD" in
+    if asset_class == "fx" then symbol
+    else if currency == "USD" then str.concat([symbol, "/USD"])
+    else str.concat([symbol, "/", currency])
+}
+
 fn positions_from_fills(fill_rows, price_rows, prices_mod) {
+  positions_from_fills_with_meta(fill_rows, price_rows, prices_mod, [])
+}
+
+fn positions_from_fills_with_meta(fill_rows, price_rows, prices_mod, inst_rows) {
   let qtys = list.fold(fill_rows, {}, fn(acc, r) {
     let delta = if r.side == "buy" then r.qty else 0 - r.qty
     if rec.has(acc, r.instrument) then rec.set(acc, r.instrument, rec.get(acc, r.instrument) + delta)
@@ -14,10 +44,15 @@ fn positions_from_fills(fill_rows, price_rows, prices_mod) {
   let instruments = rec.keys(qtys)
 
   list.map(instruments, fn(inst) {
-    let qty = rec.get(qtys, inst)
-    let price = prices_mod.consensus_price(price_rows, str.concat([inst, "/USD"]))
-    let value = if price == null then null else qty * price
-    { instrument: inst, qty: qty, price: price, value: value }
+    let qty = rec.get(qtys, inst) in
+    let hit = list.find(inst_rows, fn(r) { r.instrument_id == inst }) in
+    let meta = if rec.has(hit, "some") then hit.some else null in
+    let sym = price_symbol_for(inst, meta) in
+    let price = prices_mod.consensus_price(price_rows, sym) in
+    let value = value_position(qty, price, meta) in
+    let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class }
+  })
   })
 }
 
@@ -138,6 +173,7 @@ fn state_receipt_from_objects(account, fill_rows, cash_rows, price_rows, positio
 
 {
   positions_from_fills: positions_from_fills,
+  positions_from_fills_with_meta: positions_from_fills_with_meta,
   cash_balance_of: cash_balance_of,
   nav_of: nav_of,
   risk_state_of: risk_state_of,

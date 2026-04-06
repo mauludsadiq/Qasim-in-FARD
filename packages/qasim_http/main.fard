@@ -4,6 +4,18 @@ import("std/rec") as rec
 import("std/json") as json
 import("std/hash") as hash
 import("std/sqlite") as sqlite
+fn instrument_rows(db) {
+  list.map(
+    sqlite.query(db, "SELECT payload_json FROM object_store WHERE object_type='instrument'"),
+    fn(r) { json.decode(r.payload_json) }
+  )
+}
+
+fn instrument_meta(instrument_rows, instrument_id) {
+  let hit = list.find(instrument_rows, fn(r) { r.instrument_id == instrument_id })
+  if rec.has(hit, "some") then hit.some else null
+}
+
 fn current_ts(db) {
   let rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in
   rows[0].ts
@@ -328,6 +340,41 @@ fn post_tx_h(req, ctx) {
     ok_json_h({ digest: d })
 }
 
+fn post_instrument_h(req, ctx) {
+  let db = ctx.db in
+  let body = json.decode(req.body) in
+  let payload_json = if rec.has(body, "payload_json") then rec.get(body, "payload_json") else "" in
+  let issuer_pk_hex = if rec.has(body, "issuer_pk_hex") then rec.get(body, "issuer_pk_hex") else "" in
+  let sig_b64 = if rec.has(body, "sig_b64") then rec.get(body, "sig_b64") else "" in
+  if payload_json == "" then err_json_h(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
+  else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
+  else
+    let obj = ctx.qasim_objects.instrument(
+      (if rec.has(body, "instrument_id") then rec.get(body, "instrument_id") else ""),
+      (if rec.has(body, "asset_class") then rec.get(body, "asset_class") else "equity"),
+      (if rec.has(body, "symbol") then rec.get(body, "symbol") else ""),
+      (if rec.has(body, "currency") then rec.get(body, "currency") else "USD"),
+      (if rec.has(body, "venue") then rec.get(body, "venue") else ""),
+      (if rec.has(body, "multiplier") then rec.get(body, "multiplier") else 1),
+      (if rec.has(body, "expiry_ts_unix") then rec.get(body, "expiry_ts_unix") else 0),
+      issuer_pk_hex, sig_b64
+    ) in
+    let instrument_id = obj.payload.instrument_id in
+    if instrument_id == "" then err_json_h(400, "missing instrument_id")
+    else
+      let _ = sqlite.exec(db, str.concat([
+        "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES (",
+        "'", obj.digest, "','instrument',NULL,'",
+        instrument_id, "',0,'",
+        issuer_pk_hex, "','",
+        sig_b64, "','",
+        payload_json, "')"
+      ])) in
+      ok_json_h({ object_type: obj.object_type, digest: obj.digest, instrument_id: instrument_id })
+}
+
 fn post_cash_h(req, ctx) {
   let db = ctx.db in
   let body = json.decode(req.body) in
@@ -541,6 +588,7 @@ fn verify_chain_h(ctx) {
 
 fn handle(req, ctx) {
   if req.path == "/health" then health_h()
+  else if req.path == "/finance/ingest/instrument" then (if req.body == "" then err_json_h(400, "request body required") else post_instrument_h(req, ctx))
   else if req.path == "/finance/ingest/tx" then (if req.body == "" then err_json_h(400, "request body required") else post_tx_h(req, ctx))
   else if req.path == "/finance/ingest/cash" then (if req.body == "" then err_json_h(400, "request body required") else post_cash_h(req, ctx))
   else if req.path == "/finance/ingest/order" then (if req.body == "" then err_json_h(400, "request body required") else post_order_h(req, ctx))
@@ -570,5 +618,7 @@ fn handle(req, ctx) {
   export_account: export_account,
   export_account_at: export_account_at,
   replay: replay,
-  handle: handle
+  handle: handle,
+  instrument_rows: instrument_rows,
+  instrument_meta: instrument_meta
 }
