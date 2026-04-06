@@ -410,6 +410,12 @@ fn post_live_price(req) {
       })
 }
 
+fn require_body(req, next) {
+  if req.body == "" || req.body == null
+    then err_json(400, "request body required")
+    else next(req)
+}
+
 fn verify_chain() {
   let rows = sqlite.query(db, "SELECT seq,chain_digest,payload_json FROM receipt_log ORDER BY seq ASC") in
   let result = list.fold(rows, { ok: true, prev: "GENESIS", failed_at: null, checked: 0 }, fn(acc, row) {
@@ -430,12 +436,12 @@ fn verify_chain() {
 
 fn handle(req) {
   let res = if req.path == "/health" then health()
-  else if req.path == "/finance/ingest/tx" then post_tx(req)
-  else if req.path == "/finance/ingest/cash" then post_cash(req)
-  else if req.path == "/finance/ingest/order" then post_order(req)
-  else if req.path == "/finance/ingest/fill" then post_fill(req)
-  else if req.path == "/finance/price/claim" then post_price(req)
-  else if req.path == "/finance/live/price" then post_live_price(req)
+  else if req.path == "/finance/ingest/tx" then require_body(req, post_tx)
+  else if req.path == "/finance/ingest/cash" then require_body(req, post_cash)
+  else if req.path == "/finance/ingest/order" then require_body(req, post_order)
+  else if req.path == "/finance/ingest/fill" then require_body(req, post_fill)
+  else if req.path == "/finance/price/claim" then require_body(req, post_price)
+  else if req.path == "/finance/live/price" then require_body(req, post_live_price)
   else if req.path == "/finance/chain/verify" then verify_chain()
   else if req.path == "/finance/replay" then qasim_http.replay(req, qasim_state, ok_json)
   else if str.starts_with(req.path, "/finance/price/aggregate/") then qasim_http.price_aggregate(req, db, qasim_prices, ok_json)
