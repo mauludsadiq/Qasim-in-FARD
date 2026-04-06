@@ -123,6 +123,8 @@ A GET /finance/position/<account> response includes:
       concentration:     0.41,
       portfolio_var_95:  12.4,          -- sum of position VaR at 95%
       portfolio_var_99:  17.5,          -- sum of position VaR at 99%
+      portfolio_hvar_95: 8.3,          -- sum of historical VaR at 95%
+      portfolio_hvar_99: 14.1,         -- sum of historical VaR at 99%
       positions: [{ ... per-position risk ... }]
     },
     state_digest:   "sha256:..."        -- canonical hash of all inputs + as_of_ts
@@ -169,7 +171,7 @@ FX rates are derived from price claims where symbol matches XXX/USD. Cash
 and position values are converted to USD base currency using these rates.
 Positions with no FX rate are excluded from nav_usd.
 
-### Parametric VaR
+### Parametric & Historical VaR
 Per-position VaR is computed from realized volatility using the price claim
 history for each instrument's symbol:
 
@@ -179,6 +181,10 @@ history for each instrument's symbol:
   var_99 = |position_value| x volatility x 2.326
 
 Portfolio VaR is the sum of per-position VaR (additive, no correlation).
+
+Historical VaR uses the exact P/L distribution: position_value x return for each
+historical price return, sorted ascending. VaR is the 5th/1st percentile loss.
+Requires n >= 10 returns. Uses full price history, not staleness-filtered prices.
 
 ---
 
@@ -194,6 +200,7 @@ Portfolio VaR is the sum of per-position VaR (additive, no correlation).
   /finance/ingest/fill              Record an execution fill
   /finance/price/claim              Submit a signed price
   /finance/live/price               Fetch and sign a live price feed
+  /finance/ingest/batch             Ingest array of signed objects (single chain link)
   /finance/replay                   Replay state from supplied data
 
 All mutating endpoints require a non-empty body. Ed25519 signatures are verified
@@ -360,8 +367,7 @@ Corporate actions are stored in object_store with object_type='corporate_action'
 
 ## Future Extensions
 
-- Containerization (Dockerfile + Helm chart)
-- Signature verification on read
+- Helm chart for Kubernetes
 - Dividend cash injection from corporate actions
 - Option Greeks (delta, gamma, theta, vega) — requires strike + implied vol
 - Historical VaR (exact, from sorted P&L distribution)
@@ -369,6 +375,39 @@ Corporate actions are stored in object_store with object_type='corporate_action'
 - Private markets (DCF models, cash-flow schedules)
 - Batch ingest endpoint
 - Integrations (Bloomberg, custodians, exchanges)
+
+---
+
+## Batch Ingest
+
+POST /finance/ingest/batch accepts an array of signed objects:
+
+  {
+    "items": [
+      { "object_type": "fill", "payload_json": "...", "issuer_pk_hex": "...", "sig_b64": "..." },
+      { "object_type": "cash", ... },
+      { "object_type": "price_claim", ... }
+    ]
+  }
+
+Each item is verified and routed by object_type. All accepted items share a
+single chain link. Returns { accepted, rejected, results } with per-item status.
+Supports: fill, cash, price_claim, instrument, corporate_action, order.
+
+---
+
+## Pre-Trade What-If
+
+POST /finance/pretrade simulates a proposed order without writing to DB:
+
+  { "account": "ACCT-123", "instrument": "AAPL", "side": "buy", "qty": 100, "price": 172 }
+
+Returns current state, hypothetical state (with synthetic fill applied), and delta:
+
+  delta: { nav, cash_balance, gross_exposure, leverage, concentration }
+
+Full risk suite (parametric VaR, historical VaR) computed on both states.
+Useful for compliance checks, position limits, and risk budgeting before execution.
 
 ---
 
