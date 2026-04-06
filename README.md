@@ -71,19 +71,30 @@ for production use.
     -H "Content-Type: application/json" \
     -d "{\"payload_json\":\"{\\\"action_id\\\":\\\"CA-1\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"action_type\\\":\\\"split\\\",\\\"ex_ts_unix\\\":$NOW,\\\"effective_ts_unix\\\":$NOW,\\\"ratio_num\\\":2,\\\"ratio_den\\\":1,\\\"cash_amount\\\":0,\\\"currency\\\":\\\"USD\\\"}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
 
-### 6. Query live position
+### 6. Fetch a live price from Yahoo Finance
+
+  NOW=$(date +%s)
+  ISSUER_SECRET=$(openssl rand -hex 32)
+  curl -X POST http://0.0.0.0:9801/finance/live/price \
+    -H "Content-Type: application/json" \
+    -d "{"symbol":"AAPL/USD","venue":"NASDAQ",\
+        "url":"https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d",\
+        "feed_type":"yahoo","issuer_pk_hex":"DEV","issuer_secret_hex":"$ISSUER_SECRET"}"
+  Returns real market price with signed receipt and source_body_digest.
+
+### 7. Query live position
 
   curl http://0.0.0.0:9801/finance/position/ACCT-123
 
 Response includes positions, cash_balance, nav, nav_usd, fx_rates, risk_state
 (with per-position and portfolio VaR), state_digest, and as_of_ts.
 
-### 7. Verify chain integrity
+### 8. Verify chain integrity
 
   curl http://0.0.0.0:9801/finance/chain/verify
   {"valid":true,"checked":12,"head":"sha256:..."}
 
-### 8. Export full replay package
+### 9. Export full replay package
 
   curl http://0.0.0.0:9801/finance/export/ACCT-123
 
@@ -301,6 +312,8 @@ Chain signing: Ed25519. Key from QASIM_CHAIN_SECRET_HEX at startup.
 Payload signing: all ingest payloads carry issuer_pk_hex and sig_b64,
 verified via Ed25519 before storage. Use pk_hex = "DEV" in development.
 
+Supported feed_types: simple_json, yahoo (Yahoo Finance via User-Agent header).
+
 Live feed signing: POST /finance/live/price fetches an external URL, builds
 a canonical receipt, and signs it with the caller's Ed25519 key
 (issuer_secret_hex). Verifiable against issuer_pk_hex with no shared secret.
@@ -367,14 +380,41 @@ Corporate actions are stored in object_store with object_type='corporate_action'
 
 ## Future Extensions
 
-- Helm chart for Kubernetes
 - Dividend cash injection from corporate actions
-- Option Greeks (delta, gamma, theta, vega) — requires strike + implied vol
 - Historical VaR (exact, from sorted P&L distribution)
 - Matching and clearing engine
 - Private markets (DCF models, cash-flow schedules)
 - Batch ingest endpoint
 - Integrations (Bloomberg, custodians, exchanges)
+
+---
+
+## Performance Attribution
+
+GET /finance/attribution/<account> returns per-position P&L attribution:
+
+  {
+    beginning_nav:    2026,
+    current_nav:      5152,
+    attribution: {
+      portfolio_return: 0.0237,
+      total_pnl:        48,
+      positions: [{
+        instrument:     "AAPL",
+        avg_cost:       171,
+        current_price:  173,
+        unrealized_pnl: 48,
+        realized_pnl:   0,
+        total_pnl:      48,
+        contribution:   0.0237
+      }]
+    }
+  }
+
+cost_basis = weighted average fill price (buys only)
+realized_pnl = FIFO P&L on closed positions
+contribution = position_pnl / beginning_nav
+portfolio_return = total_pnl / beginning_nav
 
 ---
 
