@@ -35,10 +35,26 @@ fn price_rows_at(db, ts_unix_cutoff, max_price_age) {
 
 fn aggregate_symbol_prices(price_rows, symbol) {
   let rows = list.filter(price_rows, fn(r) { r.symbol == symbol })
-  let values = list.map(rows, fn(r) { r.mid })
-  let n = list.len(values)
-  if n == 0 then { symbol: symbol, median: null, mean: null, variance: null, outliers: [], sources: [] }
-  else let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in let mean = sum / n in let variance = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) / n in let threshold = variance * 4 in let outliers = list.filter(rows, fn(r) { let d = r.mid - mean in (d * d) > threshold }) in { symbol: symbol, median: null, mean: mean, variance: variance, outliers: outliers, sources: rows }
+  let n = list.len(rows)
+  if n == 0 then { symbol: symbol, median: null, mean: null, weighted_mean: null, variance: null, outliers: [], sources: [] }
+  else
+    let now_ts = if n > 0 then list.fold(rows, 0, fn(acc, r) { if r.ts_unix > acc then r.ts_unix else acc }) else 0 in
+    let weighted = list.map(rows, fn(r) {
+      let age = now_ts - r.ts_unix in
+      let w = if age < 0 then 1 else if age == 0 then 300 else 300 - age in
+      let weight = if w < 1 then 1 else w in
+      { mid: r.mid, weight: weight }
+    }) in
+    let weight_sum = list.fold(weighted, 0, fn(acc, x) { acc + x.weight }) in
+    let weighted_sum = list.fold(weighted, 0, fn(acc, x) { acc + (x.mid * x.weight) }) in
+    let weighted_mean = weighted_sum / weight_sum in
+    let values = list.map(rows, fn(r) { r.mid }) in
+    let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in
+    let mean = sum / n in
+    let variance = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) / n in
+    let threshold = variance * 4 in
+    let outliers = list.filter(rows, fn(r) { let d = r.mid - mean in (d * d) > threshold }) in
+    { symbol: symbol, median: null, mean: mean, weighted_mean: weighted_mean, variance: variance, outliers: outliers, sources: rows }
 }
 
 fn aggregate_all_prices(price_rows) {
@@ -50,7 +66,7 @@ fn aggregate_all_prices(price_rows) {
 
 fn consensus_price(price_rows, symbol) {
   let agg = aggregate_symbol_prices(price_rows, symbol)
-  agg.median
+  agg.weighted_mean
 }
 
 {
