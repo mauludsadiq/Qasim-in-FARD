@@ -166,6 +166,7 @@ fn post_tx(req) {
   else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json(400, "missing sig_b64")
   else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < require_num(p, "ts_unix") then err_json(400, "ts_unix is in the future")
   else
     let d = hex_digest(payload_json) in
     let _ = sqlite.exec(db, str.concat([
@@ -196,6 +197,7 @@ fn post_cash(req) {
   else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json(400, "missing sig_b64")
   else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < require_num(p, "ts_unix") then err_json(400, "ts_unix is in the future")
   else
     let obj = qasim_objects.cash(
       require_text(body, "account"),
@@ -230,6 +232,7 @@ fn post_order(req) {
   else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json(400, "missing sig_b64")
   else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < require_num(p, "ts_unix") then err_json(400, "ts_unix is in the future")
   else
     let obj = qasim_objects.order(
       require_text(body, "order_id"),
@@ -272,6 +275,7 @@ fn post_fill(req) {
   else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json(400, "missing sig_b64")
   else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < require_num(p, "ts_unix") then err_json(400, "ts_unix is in the future")
   else
     let obj = qasim_objects.fill(
       require_text(body, "fill_id"),
@@ -314,6 +318,7 @@ fn post_price(req) {
   else if issuer_pk_hex == "" then err_json(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json(400, "missing sig_b64")
   else if !verify_payload(issuer_pk_hex, sig_b64, payload_json) then err_json(401, "bad sig")
+  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < require_num(p, "ts_unix") then err_json(400, "ts_unix is in the future")
   else
     let d = hex_digest(payload_json) in
     let _ = sqlite.exec(db, str.concat([
@@ -363,6 +368,7 @@ fn post_live_price(req) {
     if !adapted.ok then err_json(400, adapted.error)
     else if adapted.mid == 0 then err_json(400, "adapter produced mid=0")
     else if adapted.ts_unix == 0 && feed_type == "simple_json" then err_json(400, "adapter produced ts_unix=0")
+    else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < adapted.ts_unix then err_json(400, "ts_unix is in the future")
     else
       let mid = adapted.mid in
       let ts_unix = adapted.ts_unix in
