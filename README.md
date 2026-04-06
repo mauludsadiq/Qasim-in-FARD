@@ -333,11 +333,13 @@ Request fields:
 Generate a signing key and start the server:
 
   export QASIM_CHAIN_SECRET_HEX=$(openssl rand -hex 32)
-  ~/FARD/target/release/fardrun run --program main.fard --out /tmp/qasim
+  fardrun run --program main.fard --out /tmp/qasim
 
 Server: http://0.0.0.0:9801
 
-The signing key must be preserved across restarts to maintain chain
+Note: QASIM_CHAIN_SECRET_HEX must be set before starting — the server will
+fail fast if the variable is missing. The signing key must be preserved
+across restarts to maintain chain
 signature continuity. Store it in a secrets manager for production use.
 
 ---
