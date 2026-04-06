@@ -169,7 +169,7 @@ fn post_tx(req) {
   else
     let d = hex_digest(payload_json) in
     let _ = sqlite.exec(db, str.concat([
-      "INSERT OR REPLACE INTO tx (digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      "INSERT OR IGNORE INTO tx (digest,id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
       d, "','",
       require_text(tx, "id"), "','",
       require_text(tx, "account"), "','",
@@ -182,7 +182,7 @@ fn post_tx(req) {
       sig_b64, "','",
       payload_json, "')"
     ])) in
-    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", d, "'", ", 'price_claim', NULL, '", require_text(p, "symbol"), "',", str.from(require_num(p, "ts_unix")), ", '", issuer_pk_hex, "', '", sig_b64, "', '", payload_json, "'", ")"])) in
+    let _ = sqlite.exec(db, str.concat(["INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", d, "'", ", 'price_claim', NULL, '", require_text(p, "symbol"), "',", str.from(require_num(p, "ts_unix")), ", '", issuer_pk_hex, "', '", sig_b64, "', '", payload_json, "'", ")"])) in
       ok_json({ digest: d })
 }
 
@@ -206,7 +206,7 @@ fn post_cash(req) {
       sig_b64
     ) in
     let _ = sqlite.exec(db, str.concat([
-      "INSERT OR REPLACE INTO cash_objects (digest,account,currency,amount,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      "INSERT OR IGNORE INTO cash_objects (digest,account,currency,amount,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
       obj.digest, "'", ", '",
       obj.payload.account, "'", ", '",
       obj.payload.currency, "'", ",",
@@ -216,7 +216,7 @@ fn post_cash(req) {
       sig_b64, "'", ", '",
       payload_json, "'", ")"
     ])) in
-    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", NULL,", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
+    let _ = sqlite.exec(db, str.concat(["INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", NULL,", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
       ok_json({ object_type: obj.object_type, digest: obj.digest })
 }
 
@@ -244,7 +244,7 @@ fn post_order(req) {
       sig_b64
     ) in
     let _ = sqlite.exec(db, str.concat([
-      "INSERT OR REPLACE INTO orders (digest,order_id,account,instrument,side,qty,order_type,limit_price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      "INSERT OR IGNORE INTO orders (digest,order_id,account,instrument,side,qty,order_type,limit_price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
       obj.digest, "'", ", '",
       obj.payload.order_id, "'", ", '",
       obj.payload.account, "'", ", '",
@@ -258,7 +258,7 @@ fn post_order(req) {
       sig_b64, "'", ", '",
       payload_json, "'", ")"
     ])) in
-    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", '", obj.payload.instrument, "'", ",", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
+    let _ = sqlite.exec(db, str.concat(["INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", '", obj.payload.instrument, "'", ",", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
       ok_json({ object_type: obj.object_type, digest: obj.digest })
 }
 
@@ -286,7 +286,7 @@ fn post_fill(req) {
       sig_b64
     ) in
     let _ = sqlite.exec(db, str.concat([
-      "INSERT OR REPLACE INTO fills (digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      "INSERT OR IGNORE INTO fills (digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
       obj.digest, "'", ", '",
       obj.payload.fill_id, "'", ", '",
       obj.payload.order_id, "'", ", '",
@@ -300,7 +300,7 @@ fn post_fill(req) {
       sig_b64, "'", ", '",
       payload_json, "'", ")"
     ])) in
-    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", '", obj.payload.instrument, "'", ",", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
+    let _ = sqlite.exec(db, str.concat(["INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", '", obj.payload.instrument, "'", ",", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
       ok_json({ object_type: obj.object_type, digest: obj.digest })
 }
 
@@ -317,7 +317,7 @@ fn post_price(req) {
   else
     let d = hex_digest(payload_json) in
     let _ = sqlite.exec(db, str.concat([
-      "INSERT OR REPLACE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+      "INSERT OR IGNORE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
       d, "','",
       require_text(p, "symbol"), "',",
       str.from(require_num(p, "mid")), ",'",
@@ -384,7 +384,7 @@ fn post_live_price(req) {
       let sig_hex = crypto.hmac_sha256(signing_secret_hex, receipt_json) in
       let sig_b64 = b64.encode(bytes.from_hex(sig_hex)) in
       let _ = sqlite.exec(db, str.concat([
-        "INSERT OR REPLACE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+        "INSERT OR IGNORE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
         d, "','",
         symbol, "',",
         str.from(mid), ",'",
