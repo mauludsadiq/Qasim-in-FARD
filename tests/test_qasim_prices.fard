@@ -1,0 +1,23 @@
+import("../packages/qasim_prices/main") as prices
+import("std/list") as list
+
+let rows = [
+  { symbol: "AAPL/USD", mid: 100, venue: "NASDAQ", ts_unix: 1000, digest: "d1", issuer_pk_hex: "pk1", sig_b64: "sig1", payload_json: "{}" },
+  { symbol: "AAPL/USD", mid: 200, venue: "NYSE",   ts_unix: 900,  digest: "d2", issuer_pk_hex: "pk1", sig_b64: "sig1", payload_json: "{}" },
+  { symbol: "MSFT/USD", mid: 300, venue: "NASDAQ", ts_unix: 1000, digest: "d3", issuer_pk_hex: "pk1", sig_b64: "sig1", payload_json: "{}" }
+]
+
+let agg_aapl = prices.aggregate_symbol_prices(rows, "AAPL/USD")
+let agg_msft = prices.aggregate_symbol_prices(rows, "MSFT/USD")
+let agg_none = prices.aggregate_symbol_prices(rows, "GOOG/USD")
+
+test "aggregate mean AAPL" { agg_aapl.mean == 150 }
+test "aggregate weighted_mean AAPL biased toward newer source" { agg_aapl.weighted_mean < 150 }
+test "aggregate source count AAPL" { list.len(agg_aapl.sources) == 2 }
+test "aggregate median null" { agg_aapl.median == null }
+test "aggregate variance AAPL" { agg_aapl.variance == 2500 }
+test "aggregate mean MSFT" { agg_msft.mean == 300 }
+test "aggregate empty symbol" { agg_none.mean == null }
+test "aggregate empty sources" { list.len(agg_none.sources) == 0 }
+test "consensus price AAPL is weighted_mean" { prices.consensus_price(rows, "AAPL/USD") == agg_aapl.weighted_mean }
+test "consensus price missing symbol is null" { prices.consensus_price(rows, "GOOG/USD") == null }

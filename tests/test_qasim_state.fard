@@ -1,0 +1,58 @@
+import("../packages/qasim_state/main") as state
+import("../packages/qasim_prices/main") as prices
+import("std/list") as list
+import("std/rec") as rec
+
+let price_rows = [
+  { symbol: "AAPL/USD", mid: 100, venue: "NASDAQ", ts_unix: 1000, digest: "d1", issuer_pk_hex: "pk1", sig_b64: "s1", payload_json: "{}" }
+]
+
+let fill_rows = [
+  { instrument: "AAPL", side: "buy",  qty: 10, price: 90, ts_unix: 900, digest: "f1", payload_json: "{}" },
+  { instrument: "AAPL", side: "sell", qty: 4,  price: 95, ts_unix: 950, digest: "f2", payload_json: "{}" }
+]
+
+let cash_rows = [
+  { amount: 5000, ts_unix: 800, digest: "c1", payload_json: "{}" }
+]
+
+let inst_equity = [
+  { instrument_id: "AAPL", asset_class: "equity", symbol: "AAPL", currency: "USD", venue: "NASDAQ", multiplier: 1, expiry_ts_unix: 0 }
+]
+
+let inst_fi = [
+  { instrument_id: "AAPL", asset_class: "fixed_income", symbol: "AAPL", currency: "USD", venue: "NASDAQ", multiplier: 1000, expiry_ts_unix: 0 }
+]
+
+let inst_fx = [
+  { instrument_id: "AAPL", asset_class: "fx", symbol: "AAPL/USD", currency: "USD", venue: "FX", multiplier: 1, expiry_ts_unix: 0 }
+]
+
+let positions    = state.positions_from_fills_with_meta(fill_rows, price_rows, prices, inst_equity)
+let positions_fi = state.positions_from_fills_with_meta(fill_rows, price_rows, prices, inst_fi)
+let positions_fx = state.positions_from_fills_with_meta(fill_rows, price_rows, prices, inst_fx)
+let positions_no_meta = state.positions_from_fills(fill_rows, price_rows, prices)
+
+let hit    = list.find(positions,    fn(p) { p.instrument == "AAPL" })
+let hit_fi = list.find(positions_fi, fn(p) { p.instrument == "AAPL" })
+let hit_fx = list.find(positions_fx, fn(p) { p.instrument == "AAPL" })
+
+let aapl    = if rec.has(hit,    "some") then hit.some    else null
+let aapl_fi = if rec.has(hit_fi, "some") then hit_fi.some else null
+let aapl_fx = if rec.has(hit_fx, "some") then hit_fx.some else null
+
+let cash_bal = state.cash_balance_of(cash_rows)
+let nav      = state.nav_of(positions, cash_bal)
+let risk     = state.risk_state_of(positions, cash_bal)
+
+test "net qty after buy and sell" { aapl.qty == 6 }
+test "equity value qty * price * multiplier" { aapl.value == 600 }
+test "fixed income value qty * price/100 * multiplier" { aapl_fi.value == 6000 }
+test "fx value qty * price" { aapl_fx.value == 600 }
+test "asset_class in position output" { aapl.asset_class == "equity" }
+test "cash balance" { cash_bal == 5000 }
+test "nav equals cash plus position value" { nav == 5600 }
+test "positions_from_fills backward compat" { list.len(positions_no_meta) == 1 }
+test "risk gross exposure" { risk.gross_exposure == 600 }
+test "risk net exposure" { risk.net_exposure == 600 }
+test "risk concentration" { risk.concentration == 1 }
