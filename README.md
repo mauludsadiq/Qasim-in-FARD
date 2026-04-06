@@ -8,7 +8,9 @@ Deterministic, verifiable financial state engine built in FARD.
 
 Qasim is a cryptographically anchored financial computation system.
 
-It ingests signed transactions and multi-source price feeds, computes consensus prices, derives positions and NAV, and produces a fully reproducible state digest.
+It ingests signed transactions, fills, instruments, and multi-source price feeds,
+computes recency-weighted consensus prices, derives asset-class-aware positions
+and NAV, and produces a fully reproducible state digest.
 
 Every output is traceable back to:
 - canonical payloads
@@ -33,10 +35,20 @@ All data is:
 
 ### Multi-source consensus
 Prices are aggregated across sources:
-- mean (consensus)
+- recency-weighted mean (consensus) — newer sources weighted higher
+- unweighted mean retained for transparency
 - variance computed
-- outliers detected
-- median is not computed (no sort in stdlib) — returned as null
+- outliers detected (|x - mean|² > 4σ²)
+- median not computable (no sort in stdlib) — returned as null
+
+### Asset-class-aware valuation
+Instruments are registered with asset class and multiplier.
+Valuation per asset class:
+- equity:       qty × price × multiplier
+- future:       qty × price × multiplier
+- option:       qty × price × multiplier
+- fixed_income: qty × (price / 100) × multiplier  (clean price convention)
+- fx:           qty × price
 
 ### Replayable state
 Entire system can be recomputed from:
@@ -51,8 +63,8 @@ Entire system can be recomputed from:
 
 - main.fard                  -> composition root, DB schema, ctx wiring, chain witnessing, server startup
 - packages/qasim_http        -> full routing table, all request handlers, response shaping
-- packages/qasim_prices      -> price loading, staleness filtering, aggregation, consensus
-- packages/qasim_state       -> positions, NAV, state receipts, risk state
+- packages/qasim_prices      -> price loading, staleness filtering, aggregation, weighted consensus
+- packages/qasim_state       -> positions, NAV, state receipts, risk state, asset-class valuation
 - packages/qasim_scenarios   -> scenario evaluation, shock maps, named scenario library
 - packages/qasim_crypto      -> Ed25519 chain signing
 - packages/qasim_objects     -> canonical signed object constructors
@@ -66,6 +78,7 @@ into a ctx record and passes it to qasim_http.handle on every request.
 
 ### Ingest
 
+POST /finance/ingest/instrument
 POST /finance/ingest/tx
 POST /finance/ingest/cash
 POST /finance/ingest/order
@@ -75,9 +88,10 @@ POST /finance/live/price
 POST /finance/replay
 
 All mutating endpoints require a non-empty request body.
-Signed payloads are verified via Ed25519 before storage.
+All signed payloads are verified via Ed25519 before storage.
 Records are immutable once written (INSERT OR IGNORE — first write wins).
 Future-dated ts_unix values are rejected at ingest.
+URL-encoded path parameters are decoded automatically (str.url_decode).
 
 ### Query
 
@@ -93,6 +107,25 @@ GET /health
 
 ---
 
+## Instrument Model
+
+Instruments are registered via POST /finance/ingest/instrument and stored
+in object_store. Each instrument carries:
+
+- instrument_id   — unique identifier referenced by orders and fills
+- asset_class     — equity | future | option | fixed_income | fx
+- symbol          — price lookup symbol
+- currency        — denomination currency
+- venue           — exchange or venue
+- multiplier      — contract multiplier (default 1)
+- expiry_ts_unix  — expiry timestamp (0 for non-expiring instruments)
+
+Instrument metadata is fetched at position computation time and used to
+select the correct valuation formula and price symbol. Instruments without
+registered metadata default to equity valuation with multiplier 1.
+
+---
+
 ## Storage
 
 SQLite tables (all append-only via INSERT OR IGNORE):
@@ -102,7 +135,7 @@ SQLite tables (all append-only via INSERT OR IGNORE):
 - orders          — signed order records
 - cash_objects    — signed cash records
 - price_claims    — signed multi-source price records
-- object_store    — unified object index by type
+- object_store    — unified object index by type (instruments, fills, orders, cash, prices)
 - receipt_log     — append-only chain of request/response/state digests
 
 Positions and NAV are computed from fills, not tx.
@@ -110,9 +143,9 @@ tx records are stored but not used in valuation.
 
 ---
 
-## Price Staleness
+## Price Consensus
 
-Qasim enforces an explicit freshness constraint on all price data.
+### Staleness
 
 Parameter: MAX_PRICE_AGE = 300 seconds
 
@@ -121,11 +154,21 @@ A price is valid at time t only if:
 - (t - ts_unix) ≤ MAX_PRICE_AGE
 
 Stale prices are excluded from valuation. Affected positions show price = null
-and are excluded from NAV. This applies to all endpoints including the
-non-time-indexed /finance/position/ and /finance/export/ endpoints,
-which use the server wall clock as the cutoff.
+and are excluded from NAV. Applies to all endpoints — live endpoints use
+server wall clock as cutoff.
 
 Future-dated prices (ts_unix > now) are rejected at ingest.
+
+### Weighting
+
+Price sources are weighted by recency:
+
+  weight = 300 - (now - ts_unix)   minimum weight: 1
+
+  weighted_mean = Σ(weight × mid) / Σ(weight)
+
+The most recent price gets maximum weight (300). A price at the staleness
+limit gets weight 1. consensus_price returns weighted_mean.
 
 ---
 
@@ -249,33 +292,39 @@ All ingest payloads are verified via Ed25519 before storage.
 Use pk_hex = "DEV" to bypass verification in development.
 
 ### Live feed signing
-Live price ingestion uses HMAC-SHA256 (symmetric). The signing_secret_hex
-is provided per-request. This is weaker than asymmetric signing — the
-verifier must hold the secret.
+Live price ingestion signs receipts with Ed25519 using the caller-provided
+issuer_secret_hex. The signature is verifiable against issuer_pk_hex without
+any shared secret.
+
+Request fields:
+- symbol
+- venue
+- url
+- feed_type         (simple_json | coindesk)
+- issuer_pk_hex
+- issuer_secret_hex
 
 ---
 
 ## Limitations
 
-- Mean consensus only (no weighted mean, no trimmed mean — no sort in stdlib)
-- Median not computable — returned as null in aggregate response
-- No URL decoding (e.g. %2F in path parameters)
-- HMAC for live feed signing (not asymmetric)
-- Limited asset coverage
+- No trimmed mean (no sort in stdlib)
+- Median not computable — returned as null
 - Live /finance/position/ digest not time-anchored (as_of_ts: null)
+- Instrument metadata fetched per-request (no caching)
 
 ---
 
 ## Future Extensions
 
-- Weighted consensus
 - Trimmed mean
 - Signature verification on read
-- URL decoding
-- Multi-asset support
+- Multi-currency NAV with FX conversion
+- Corporate action processing
 - Matching / clearing engine
 - FARD receipts per request
 - Time-anchored live position digest
+- Weighted scenario library
 
 ---
 
