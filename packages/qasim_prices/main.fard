@@ -33,12 +33,30 @@ fn price_rows_at(db, ts_unix_cutoff, max_price_age) {
   list.filter(rows, fn(r) { (ts_unix_cutoff - r.ts_unix) <= max_price_age })
 }
 
+fn median_of(sorted_values, n) {
+  let mid = n / 2
+  if n == 0 then null
+  else if (n - (mid * 2)) == 0 then (sorted_values[mid - 1] + sorted_values[mid]) / 2
+  else sorted_values[mid]
+}
+
+fn trimmed_mean_of(sorted_values, n) {
+  if n < 4 then null
+  else
+    let trim = n / 4 in
+    let indexed = list.fold(sorted_values, { i: 0, vals: [] }, fn(acc, x) { { i: acc.i + 1, vals: if acc.i >= trim && acc.i < (n - trim) then list.append(acc.vals, x) else acc.vals } }) in
+    let trimmed = indexed.vals in
+    let m = list.len(trimmed) in
+    if m == 0 then null
+    else list.fold(trimmed, 0, fn(acc, x) { acc + x }) / m
+}
+
 fn aggregate_symbol_prices(price_rows, symbol) {
   let rows = list.filter(price_rows, fn(r) { r.symbol == symbol })
   let n = list.len(rows)
-  if n == 0 then { symbol: symbol, median: null, mean: null, weighted_mean: null, variance: null, outliers: [], sources: [] }
+  if n == 0 then { symbol: symbol, median: null, mean: null, weighted_mean: null, trimmed_mean: null, variance: null, outliers: [], sources: [] }
   else
-    let now_ts = if n > 0 then list.fold(rows, 0, fn(acc, r) { if r.ts_unix > acc then r.ts_unix else acc }) else 0 in
+    let now_ts = list.fold(rows, 0, fn(acc, r) { if r.ts_unix > acc then r.ts_unix else acc }) in
     let weighted = list.map(rows, fn(r) {
       let age = now_ts - r.ts_unix in
       let w = if age < 0 then 1 else if age == 0 then 300 else 300 - age in
@@ -49,12 +67,15 @@ fn aggregate_symbol_prices(price_rows, symbol) {
     let weighted_sum = list.fold(weighted, 0, fn(acc, x) { acc + (x.mid * x.weight) }) in
     let weighted_mean = weighted_sum / weight_sum in
     let values = list.map(rows, fn(r) { r.mid }) in
+    let sorted_values = list.sort_by(values, fn(a, b) { a - b }) in
     let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in
     let mean = sum / n in
+    let median = median_of(sorted_values, n) in
+    let trimmed_mean = trimmed_mean_of(sorted_values, n) in
     let variance = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) / n in
     let threshold = variance * 4 in
     let outliers = list.filter(rows, fn(r) { let d = r.mid - mean in (d * d) > threshold }) in
-    { symbol: symbol, median: null, mean: mean, weighted_mean: weighted_mean, variance: variance, outliers: outliers, sources: rows }
+    { symbol: symbol, median: median, mean: mean, weighted_mean: weighted_mean, trimmed_mean: trimmed_mean, variance: variance, outliers: outliers, sources: rows }
 }
 
 fn aggregate_all_prices(price_rows) {

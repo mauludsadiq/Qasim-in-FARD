@@ -14,10 +14,24 @@ let agg_none = prices.aggregate_symbol_prices(rows, "GOOG/USD")
 test "aggregate mean AAPL" { agg_aapl.mean == 150 }
 test "aggregate weighted_mean AAPL biased toward newer source" { agg_aapl.weighted_mean < 150 }
 test "aggregate source count AAPL" { list.len(agg_aapl.sources) == 2 }
-test "aggregate median null" { agg_aapl.median == null }
+test "aggregate median AAPL" { agg_aapl.median == 150 }
 test "aggregate variance AAPL" { agg_aapl.variance == 2500 }
 test "aggregate mean MSFT" { agg_msft.mean == 300 }
 test "aggregate empty symbol" { agg_none.mean == null }
 test "aggregate empty sources" { list.len(agg_none.sources) == 0 }
 test "consensus price AAPL is weighted_mean" { prices.consensus_price(rows, "AAPL/USD") == agg_aapl.weighted_mean }
 test "consensus price missing symbol is null" { prices.consensus_price(rows, "GOOG/USD") == null }
+
+let rows5 = [
+  { symbol: "AAPL/USD", mid: 100, venue: "A", ts_unix: 1000, digest: "d1", issuer_pk_hex: "pk1", sig_b64: "s1", payload_json: "{}" },
+  { symbol: "AAPL/USD", mid: 200, venue: "B", ts_unix: 900,  digest: "d2", issuer_pk_hex: "pk1", sig_b64: "s1", payload_json: "{}" },
+  { symbol: "AAPL/USD", mid: 300, venue: "C", ts_unix: 800,  digest: "d3", issuer_pk_hex: "pk1", sig_b64: "s1", payload_json: "{}" },
+  { symbol: "AAPL/USD", mid: 400, venue: "D", ts_unix: 700,  digest: "d4", issuer_pk_hex: "pk1", sig_b64: "s1", payload_json: "{}" },
+  { symbol: "AAPL/USD", mid: 500, venue: "E", ts_unix: 600,  digest: "d5", issuer_pk_hex: "pk1", sig_b64: "s1", payload_json: "{}" }
+]
+
+let agg5 = prices.aggregate_symbol_prices(rows5, "AAPL/USD")
+
+test "median of 5 values" { agg5.median == 300 }
+test "trimmed mean of 5 values drops outer quartile" { agg5.trimmed_mean == 300 }
+test "trimmed_mean null for n less than 4" { agg_aapl.trimmed_mean == null }
