@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  qasim:
+    build: .
+    image: qasim:latest
+    ports:
+      - "9801:9801"
+    environment:
+      - QASIM_CHAIN_SECRET_HEX=${QASIM_CHAIN_SECRET_HEX}
+    volumes:
+      - qasim-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9801/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  qasim-data:

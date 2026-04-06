@@ -1,0 +1,8 @@
+.git
+*.bak
+tests/
+docs/
+receipts/
+main
+/tmp
+target/

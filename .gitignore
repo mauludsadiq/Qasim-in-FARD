@@ -1,0 +1,3 @@
+fard_src/*
+!fard_src/.gitkeep
+*.bak
