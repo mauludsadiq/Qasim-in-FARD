@@ -191,12 +191,12 @@ fn replay(req, state_mod, ok_json) {
   let payload = {
     account: account,
     as_of_ts: as_of_ts,
-    tx_digests: list.map(tx_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(r.payload_json) }),
-    price_digests: list.map(price_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(r.payload_json) }),
+    fill_digests: list.map(tx_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(json.canonicalize(r)) }),
+    price_digests: list.map(price_rows2, fn(r) { if rec.has(r, "digest") then r.digest else hash.sha256_text(json.canonicalize(r)) }),
     positions: positions,
     nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash))
   }
-  ok_json({ account: account, as_of_ts: as_of_ts, positions: positions, nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: state_mod.risk_state_of(positions), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows2), price_count: list.len(price_rows2) })
+  ok_json({ account: account, as_of_ts: as_of_ts, positions: positions, nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: state_mod.risk_state_of(positions, state_mod.cash_balance_of(cash)), state_digest: hash.sha256_text(json.encode(payload)), tx_count: list.len(tx_rows2), price_count: list.len(price_rows2) })
 }
 
 
