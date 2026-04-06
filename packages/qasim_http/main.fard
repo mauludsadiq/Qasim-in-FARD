@@ -138,7 +138,7 @@ fn price_aggregate(req, db, prices_mod, ok_json) {
   ok_json(prices_mod.aggregate_symbol_prices(rows, symbol))
 }
 
-fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json) {
+fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position_cache, mutex_mod) {
   let prefix = "/finance/position/"
   let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let fills = fill_rows_for_account(db, account)
@@ -146,11 +146,21 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let now = current_ts(db)
   let prices = prices_mod.price_rows_at(db, now, max_price_age)
   let inst_rows = instrument_rows(db)
-  let positions = state_mod.positions_from_fills_with_meta(fills, prices, prices_mod, inst_rows)
+  let fill_key = list.fold(fills, "", fn(acc, r) { str.concat([acc, r.digest]) })
+  let cash_key = list.fold(cash, "", fn(acc, r) { str.concat([acc, r.digest]) })
+  let price_key = list.fold(prices, "", fn(acc, r) { str.concat([acc, r.digest]) })
+  let cache_key = hash.sha256_text(str.concat([account, fill_key, cash_key, price_key]))
+  let cache = mutex_mod.lock(position_cache)
+  let cached = if rec.has(cache, cache_key) then rec.get(cache, cache_key) else null
+  let positions = if cached != null then cached
+    else
+      let computed = state_mod.positions_from_fills_with_meta(fills, prices, prices_mod, inst_rows) in
+      let new_cache = rec.set(cache, cache_key, computed) in
+      let _ = mutex_mod.unlock(position_cache, new_cache) in
+      computed
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
   ok_json({ account: account, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
-
 fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/state_at/"
   let rest = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
@@ -617,7 +627,7 @@ fn handle(req, ctx) {
   else if str.starts_with(req.path, "/finance/state_payload/") then state_payload_at(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h, err_json_h)
   else if str.starts_with(req.path, "/finance/scenario_at/") then scenario_at(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.qasim_scenarios, ctx.max_price_age, ok_json_h, err_json_h)
   else if str.starts_with(req.path, "/finance/state_at/") then state_at(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h, err_json_h)
-  else if str.starts_with(req.path, "/finance/position/") then get_position(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h)
+  else if str.starts_with(req.path, "/finance/position/") then get_position(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h, ctx.position_cache, ctx.mutex)
   else { status: 404, headers: {}, body: "not found" }
 }
 

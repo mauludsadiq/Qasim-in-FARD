@@ -16,6 +16,7 @@ import("./packages/qasim_http/main") as qasim_http
 import("./packages/qasim_scenarios/main") as qasim_scenarios
 import("./packages/qasim_objects/main") as qasim_objects
 import("std/env") as env
+import("std/mutex") as mutex
 
 let DB_PATH = "/tmp/qasim_fard.db"
 let chain_secret_hex_opt = env.get("QASIM_CHAIN_SECRET_HEX")
@@ -134,6 +135,8 @@ fn err_json(status, msg) {
 }
 
 
+let position_cache = mutex.new({})
+
 let ctx = {
   db: db,
   max_price_age: MAX_PRICE_AGE,
@@ -146,7 +149,9 @@ let ctx = {
   bytes: bytes,
   b64: b64,
   http: http,
-  str: str
+  str: str,
+  position_cache: position_cache,
+  mutex: mutex
 }
 
 fn handle(req) {
