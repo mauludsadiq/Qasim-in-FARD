@@ -15,8 +15,12 @@ import("./packages/qasim_state/main") as qasim_state
 import("./packages/qasim_http/main") as qasim_http
 import("./packages/qasim_scenarios/main") as qasim_scenarios
 import("./packages/qasim_objects/main") as qasim_objects
+import("std/env") as env
 
 let DB_PATH = "/tmp/qasim_fard.db"
+let chain_secret_hex = env.get("QASIM_CHAIN_SECRET_HEX")
+let _ = if chain_secret_hex == "" then error("QASIM_CHAIN_SECRET_HEX is not set") else null
+
 let MAX_PRICE_AGE = 300
 let db = sqlite.open(DB_PATH)
 
@@ -433,8 +437,8 @@ fn handle(req) {
   let prev_chain = if rec.has(prev_hit, "some") then prev_hit.some.chain_digest else "GENESIS" in
   let chain_payload = json.canonicalize({ prev_chain_digest: prev_chain, request_digest: req_digest, response_digest: res_digest, state_digest: state_digest }) in
   let chain_digest = hash.sha256_text(chain_payload) in
-  let chain_sig = qasim_crypto.chain_sign("1111111111111111111111111111111111111111111111111111111111111111", chain_digest) in
-  let chain_pk  = qasim_crypto.signer_id("1111111111111111111111111111111111111111111111111111111111111111") in
+  let chain_sig = qasim_crypto.chain_sign(chain_secret_hex, chain_digest) in
+  let chain_pk  = qasim_crypto.signer_id(chain_secret_hex) in
   let _ = sqlite.exec(db, str.concat([
     "INSERT INTO receipt_log (req_digest,res_digest,state_digest,chain_digest,payload_json) VALUES ('",
     req_digest, "'", ", '",
