@@ -291,6 +291,38 @@ fn apply_corporate_actions(qty, instrument, ca_rows, as_of_ts) {
   })
 }
 
+fn qty_at_ex_date(fill_rows, instrument, ex_ts_unix) {
+  let pre_ex_fills = list.filter(fill_rows, fn(r) {
+    r.instrument == instrument && r.ts_unix < ex_ts_unix
+  })
+  list.fold(pre_ex_fills, 0, fn(acc, r) {
+    let delta = if r.side == "buy" then r.qty else 0 - r.qty
+    acc + delta
+  })
+}
+
+fn dividend_cash_of(fill_rows, ca_rows, as_of_ts) {
+  let dividends = list.filter(ca_rows, fn(ca) {
+    let action_type = if rec.has(ca, "action_type") then ca.action_type else "" in
+    let cash_amount = if rec.has(ca, "cash_amount") then ca.cash_amount else 0 in
+    action_type == "dividend" &&
+    cash_amount > 0 &&
+    (as_of_ts == null || ca.effective_ts_unix <= as_of_ts)
+  })
+  list.fold(dividends, {}, fn(acc, ca) {
+    let instrument = if rec.has(ca, "instrument") then ca.instrument else "" in
+    let ex_ts = if rec.has(ca, "ex_ts_unix") then ca.ex_ts_unix else 0 in
+    let cash_amount = if rec.has(ca, "cash_amount") then ca.cash_amount else 0 in
+    let currency = if rec.has(ca, "currency") then ca.currency else "USD" in
+    let qty = qty_at_ex_date(fill_rows, instrument, ex_ts) in
+    let total = qty * cash_amount in
+    if total == 0 then acc
+    else if rec.has(acc, currency) then rec.set(acc, currency, rec.get(acc, currency) + total)
+    else rec.set(acc, currency, total)
+  })
+}
+
+
 fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_rows, ca_rows, as_of_ts) {
   let qtys = list.fold(fill_rows, {}, fn(acc, r) {
     let delta = if r.side == "buy" then r.qty else 0 - r.qty
@@ -317,6 +349,8 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   nav_usd_of: nav_usd_of,
   fx_rates_from_prices: fx_rates_from_prices,
   apply_corporate_actions: apply_corporate_actions,
+  qty_at_ex_date: qty_at_ex_date,
+  dividend_cash_of: dividend_cash_of,
   positions_from_fills_with_actions: positions_from_fills_with_actions,
   positions_from_fills_with_meta: positions_from_fills_with_meta,
   cash_balance_of: cash_balance_of,
