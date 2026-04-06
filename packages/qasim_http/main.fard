@@ -4,6 +4,11 @@ import("std/rec") as rec
 import("std/json") as json
 import("std/hash") as hash
 import("std/sqlite") as sqlite
+fn current_ts(db) {
+  let rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in
+  rows[0].ts
+}
+
 fn fill_rows_for_account(db, account) {
   list.map(sqlite.query(db, str.concat([
     "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='fill' AND account='",
@@ -121,12 +126,13 @@ fn price_aggregate(req, db, prices_mod, ok_json) {
   ok_json(prices_mod.aggregate_symbol_prices(rows, symbol))
 }
 
-fn get_position(req, db, prices_mod, state_mod, ok_json) {
+fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let prefix = "/finance/position/"
   let account = str.slice(req.path, str.len(prefix), str.len(req.path))
   let fills = fill_rows_for_account(db, account)
   let cash = cash_rows_for_account(db, account)
-  let prices = prices_mod.latest_price_rows(db)
+  let now = current_ts(db)
+  let prices = prices_mod.price_rows_at(db, now, max_price_age)
   let positions = state_mod.positions_from_fills(fills, prices, prices_mod)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
   ok_json({ account: account, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
@@ -150,12 +156,13 @@ fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
     ok_json({ account: account, as_of_ts: cutoff, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
-fn export_account(req, db, prices_mod, state_mod, ok_json) {
+fn export_account(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let prefix = "/finance/export/"
   let account = str.slice(req.path, str.len(prefix), str.len(req.path))
   let fills = fill_rows_for_account(db, account)
   let cash = cash_rows_for_account(db, account)
-  let prices = prices_mod.latest_price_rows(db)
+  let now = current_ts(db)
+  let prices = prices_mod.price_rows_at(db, now, max_price_age)
   let positions = state_mod.positions_from_fills(fills, prices, prices_mod)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
   ok_json({ account: account, fills: fills, cash: cash, prices: prices, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
