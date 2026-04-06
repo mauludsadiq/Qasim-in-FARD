@@ -318,6 +318,73 @@ fn nav_usd_of(positions, cash_rows, fx_rates) {
   cash_usd + positions_usd
 }
 
+
+fn cost_basis_of(fill_rows, instrument) {
+  let inst_fills = list.filter(fill_rows, fn(r) { r.instrument == instrument })
+  let result = list.fold(inst_fills, { total_cost: 0, total_qty: 0 }, fn(acc, r) {
+    if r.side == "buy" then
+      { total_cost: acc.total_cost + (r.qty * r.price), total_qty: acc.total_qty + r.qty }
+    else
+      { total_cost: acc.total_cost, total_qty: acc.total_qty }
+  })
+  if result.total_qty == 0 then null
+  else result.total_cost / result.total_qty
+}
+
+fn realized_pnl_of(fill_rows, instrument) {
+  let inst_fills = list.sort_by(
+    list.filter(fill_rows, fn(r) { r.instrument == instrument }),
+    fn(a, b) { a.ts_unix - b.ts_unix }
+  )
+  let result = list.fold(inst_fills, { avg_cost: 0, qty: 0, realized: 0 }, fn(acc, r) {
+    if r.side == "buy" then
+      let new_qty = acc.qty + r.qty in
+      let new_cost = if new_qty == 0 then 0
+        else (acc.avg_cost * acc.qty + r.price * r.qty) / new_qty in
+      { avg_cost: new_cost, qty: new_qty, realized: acc.realized }
+    else
+      let sell_qty = if r.qty > acc.qty then acc.qty else r.qty in
+      let pnl = sell_qty * (r.price - acc.avg_cost) in
+      { avg_cost: acc.avg_cost, qty: acc.qty - sell_qty, realized: acc.realized + pnl }
+  })
+  result.realized
+}
+
+fn attribution_of(fill_rows, positions, beginning_nav) {
+  let items = list.map(positions, fn(p) {
+    let avg_cost = cost_basis_of(fill_rows, p.instrument) in
+    let unrealized_pnl = if avg_cost == null || p.price == null then null
+      else (p.price - avg_cost) * p.qty in
+    let realized_pnl = realized_pnl_of(fill_rows, p.instrument) in
+    let total_pnl = if unrealized_pnl == null then realized_pnl
+      else if realized_pnl == null then unrealized_pnl
+      else unrealized_pnl + realized_pnl in
+    let contribution = if total_pnl == null || beginning_nav == null || beginning_nav == 0 then null
+      else cast.float(total_pnl) / cast.float(beginning_nav) in
+    {
+      instrument: p.instrument,
+      qty: p.qty,
+      avg_cost: avg_cost,
+      current_price: p.price,
+      unrealized_pnl: unrealized_pnl,
+      realized_pnl: realized_pnl,
+      total_pnl: total_pnl,
+      contribution: contribution
+    }
+  })
+  let total_pnl = list.fold(items, 0, fn(acc, x) {
+    if x.total_pnl == null then acc else acc + x.total_pnl
+  })
+  let portfolio_return = if beginning_nav == null || beginning_nav == 0 then null
+    else cast.float(total_pnl) / cast.float(beginning_nav)
+  {
+    positions: items,
+    total_pnl: total_pnl,
+    portfolio_return: portfolio_return,
+    beginning_nav: beginning_nav
+  }
+}
+
 fn apply_corporate_actions(qty, instrument, ca_rows, as_of_ts) {
   let applicable = list.filter(ca_rows, fn(ca) {
     ca.instrument == instrument &&
@@ -397,6 +464,9 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   qty_at_ex_date: qty_at_ex_date,
   dividend_cash_of: dividend_cash_of,
   positions_from_fills_with_actions: positions_from_fills_with_actions,
+  cost_basis_of: cost_basis_of,
+  realized_pnl_of: realized_pnl_of,
+  attribution_of: attribution_of,
   positions_from_fills_with_meta: positions_from_fills_with_meta,
   cash_balance_of: cash_balance_of,
   nav_of: nav_of,

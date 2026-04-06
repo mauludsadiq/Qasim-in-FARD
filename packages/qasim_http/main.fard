@@ -176,6 +176,37 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   ok_json({ account: account, as_of_ts: now, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
+
+fn attribution_h(req, ctx) {
+  let db = ctx.db in
+  let prefix = "/finance/attribution/" in
+  let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
+  if account == "" then err_json_h(400, "missing account")
+  else
+    let fills = fill_rows_for_account(db, account) in
+    let cash = cash_rows_for_account(db, account) in
+    let now = current_ts(db) in
+    let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
+    let inst_rows = instrument_rows(db) in
+    let ca_rows = corporate_action_rows(db) in
+    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+    let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
+    let nav = ctx.qasim_state.nav_of(positions, cash_balance) in
+    let total_cost = list.fold(fills, 0, fn(acc, r) {
+      if r.side == "buy" then acc + (r.qty * r.price) else acc
+    }) in
+    let beginning_nav = cash_balance + total_cost in
+    let attribution = ctx.qasim_state.attribution_of(fills, positions, beginning_nav) in
+    ok_json_h({
+      account: account,
+      as_of_ts: now,
+      current_nav: nav,
+      cash_balance: cash_balance,
+      beginning_nav: beginning_nav,
+      attribution: attribution
+    })
+}
+
 fn pretrade_h(req, ctx) {
   let db = ctx.db in
   let body = json.decode(req.body) in
@@ -840,6 +871,7 @@ fn handle(req, ctx) {
   else if req.path == "/finance/ingest/fill" then (if req.body == "" then err_json_h(400, "request body required") else post_fill_h(req, ctx))
   else if req.path == "/finance/price/claim" then (if req.body == "" then err_json_h(400, "request body required") else post_price_h(req, ctx))
   else if req.path == "/finance/live/price" then (if req.body == "" then err_json_h(400, "request body required") else post_live_price_h(req, ctx))
+  else if str.starts_with(req.path, "/finance/attribution/") then attribution_h(req, ctx)
   else if req.path == "/finance/pretrade" then (if req.body == "" then err_json_h(400, "request body required") else pretrade_h(req, ctx))
   else if req.path == "/finance/chain/verify" then verify_chain_h(ctx)
   else if req.path == "/finance/replay" then (if req.body == "" then err_json_h(400, "request body required") else replay(req, ctx.qasim_state, ok_json_h))
