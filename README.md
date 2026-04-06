@@ -33,156 +33,109 @@ All data is:
 
 ### Multi-source consensus
 Prices are aggregated across sources:
-- mean (current)
+- mean (consensus)
 - variance computed
 - outliers detected
+- median is not computed (no sort in stdlib) — returned as null
 
 ### Replayable state
 Entire system can be recomputed from:
-- transactions
+- fills
 - price claims
 
 ---
 
 ## Architecture
 
-### Modular Structure (NEW)
+### Modular Structure
 
-Qasim is no longer organized as a single monolithic main.fard file.
+- main.fard                  -> composition root, DB schema, ctx wiring, chain witnessing, server startup
+- packages/qasim_http        -> full routing table, all request handlers, response shaping
+- packages/qasim_prices      -> price loading, staleness filtering, aggregation, consensus
+- packages/qasim_state       -> positions, NAV, state receipts, risk state
+- packages/qasim_scenarios   -> scenario evaluation, shock maps, named scenario library
+- packages/qasim_crypto      -> Ed25519 chain signing
+- packages/qasim_objects     -> canonical signed object constructors
 
-Current structure:
-
-- main.fard                 -> composition root, imports, wiring, server startup
-- packages/qasim_prices    -> price loading, staleness filtering, aggregation, consensus
-- packages/qasim_state     -> positions, NAV, state receipts
-- packages/qasim_http      -> route handlers, request parsing, response shaping
-
-This separation makes pricing, state, and HTTP independently testable and reduces hidden coupling.
+All routing and handler logic lives in qasim_http. main.fard wires dependencies
+into a ctx record and passes it to qasim_http.handle on every request.
 
 ---
 
-## Architecture
+## Endpoints
 
-### 1. Ingestion
+### Ingest
 
-#### Transactions
 POST /finance/ingest/tx
-
-Requires:
-- payload_json
-- issuer_pk_hex
-- sig_b64
-
-Verified via Ed25519
-
----
-
-#### Price claims
+POST /finance/ingest/cash
+POST /finance/ingest/order
+POST /finance/ingest/fill
 POST /finance/price/claim
-
-Signed payloads stored as immutable records
-
----
-
-#### Live price ingestion
 POST /finance/live/price
-
-Inputs:
-- symbol
-- venue
-- url
-- feed_type
-- issuer_pk_hex
-- signing_secret_hex
-
-Process:
-1. Fetch external data
-2. Adapt into canonical format
-3. Build receipt
-4. Hash receipt
-5. Sign receipt (HMAC)
-6. Store as price_claim
-
----
-
-### 2. Storage
-
-SQLite tables:
-
-tx
-- signed transaction records
-
-price_claims
-- signed multi-source price records
-
----
-
-### 3. Aggregation
-
-GET /finance/price/aggregate/<symbol>
-
-Returns:
-- mean (consensus)
-- variance
-- outliers
-- sources
-
-Consensus rule:
-mean-based (deterministic, no sorting dependency)
-
----
-
-### 4. Positions & NAV
-
-GET /finance/position/<account>
-
-- aggregates transactions
-- applies consensus price
-- computes:
-  - positions
-  - NAV
-  - state digest
-
----
-
-### 5. Export
-
-GET /finance/export/<account>
-
-Returns:
-- transactions
-- price claims
-- positions
-- NAV
-- state digest
-
-Complete replay package
-
----
-
-### 6. Replay
-
 POST /finance/replay
 
-Input:
-- txs
-- prices
+All mutating endpoints require a non-empty request body.
+Signed payloads are verified via Ed25519 before storage.
+Records are immutable once written (INSERT OR IGNORE — first write wins).
+Future-dated ts_unix values are rejected at ingest.
 
-Output:
-- positions
-- NAV
-- state digest
+### Query
+
+GET /finance/position/<account>
+GET /finance/export/<account>
+GET /finance/price/aggregate/<symbol>
+GET /finance/state_at/<account>/<ts_unix>
+GET /finance/export_at/<account>/<ts_unix>
+GET /finance/state_payload/<account>/<ts_unix>
+GET /finance/scenario_at/<account>/<ts_unix>/<scenario>
+GET /finance/chain/verify
+GET /health
+
+---
+
+## Storage
+
+SQLite tables (all append-only via INSERT OR IGNORE):
+
+- tx              — signed transaction records
+- fills           — signed fill records (used for position computation)
+- orders          — signed order records
+- cash_objects    — signed cash records
+- price_claims    — signed multi-source price records
+- object_store    — unified object index by type
+- receipt_log     — append-only chain of request/response/state digests
+
+Positions and NAV are computed from fills, not tx.
+tx records are stored but not used in valuation.
+
+---
+
+## Price Staleness
+
+Qasim enforces an explicit freshness constraint on all price data.
+
+Parameter: MAX_PRICE_AGE = 300 seconds
+
+A price is valid at time t only if:
+- ts_unix ≤ t
+- (t - ts_unix) ≤ MAX_PRICE_AGE
+
+Stale prices are excluded from valuation. Affected positions show price = null
+and are excluded from NAV. This applies to all endpoints including the
+non-time-indexed /finance/position/ and /finance/export/ endpoints,
+which use the server wall clock as the cutoff.
+
+Future-dated prices (ts_unix > now) are rejected at ingest.
 
 ---
 
 ## Canonical State Model
 
-State is defined as:
-
 state_digest = SHA256(
   account,
   as_of_ts,
-  tx_digests,
+  fill_digests,
+  cash_digests,
   price_digests,
   positions,
   nav,
@@ -199,39 +152,41 @@ risk_state = deterministic transform of positions including:
 - leverage
 - concentration
 
-This is the single canonical state definition.
+Live position queries pass as_of_ts = null. State digests from
+/finance/position/ are not time-anchored. Use /finance/state_at/
+for time-indexed, reproducible digests.
+
+---
+
+## Time-Indexed State
+
+State is a pure function:
+
+  state(t) = f(fills ≤ t, prices ≤ t)
+
+All _at endpoints accept a ts_unix cutoff and use only data at or before t.
+No forward-looking data is ever used. Digests include as_of_ts.
+
+Endpoints:
+- GET /finance/state_at/<account>/<ts_unix>
+- GET /finance/export_at/<account>/<ts_unix>
+- GET /finance/state_payload/<account>/<ts_unix>
+- GET /finance/scenario_at/<account>/<ts_unix>/<scenario>
+
+Replay also accepts an optional as_of_ts field to constrain to a historical cutoff.
 
 ---
 
 ## Scenario System
 
-Qasim supports deterministic scenario evaluation as first-class transforms.
+Scenarios are deterministic transforms applied to base state.
 
-### Scenario Types
+### Types
 
-1. Instrument shock maps
+1. Instrument shock maps: AAPL:-0.2,MSFT:-0.1
+2. Named scenarios: equity_down_10, equity_up_10, market_crash_20, tech_selloff, bull_case
 
-Example:
-
-AAPL:-0.2,MSFT:-0.1
-
-2. Named scenarios
-
-Examples:
-
-- equity_down_10
-- equity_up_10
-- market_crash_20
-- tech_selloff
-- bull_case
-
-Each resolves to a canonical shock_spec.
-
----
-
-### Scenario Output
-
-Each scenario returns:
+### Output
 
 - scenario
 - scenario_version
@@ -241,18 +196,8 @@ Each scenario returns:
 - pnl
 - scenario_digest
 
-Where:
-
-scenario_digest = SHA256(
-  account,
-  as_of_ts,
-  scenario,
-  scenario_version,
-  shock_spec,
-  shocked_positions,
-  shocked_nav,
-  pnl
-)
+scenario_digest = SHA256(account, as_of_ts, scenario, scenario_version,
+                         shock_spec, shocked_positions, shocked_nav, pnl)
 
 Scenarios do not modify base state_digest.
 
@@ -260,83 +205,64 @@ Scenarios do not modify base state_digest.
 
 ## Receipt Chain
 
-Qasim maintains an append-only chain across requests.
+Every request is recorded in an append-only receipt_log.
 
-Each request records:
-
-- request_digest
-- response_digest
-- state_digest
-- chain_digest
+Each entry stores:
+- req_digest    — SHA256 of canonical request (path + body)
+- res_digest    — SHA256 of canonical response (status + headers + body)
+- state_digest  — extracted from response body if present
+- chain_digest  — SHA256 of (prev_chain_digest, req_digest, res_digest, state_digest)
+- payload_json  — the pre-image used to compute chain_digest
 
 Chain rule:
+  chain_digest_n = SHA256(chain_digest_{n-1}, request, response, state)
 
-chain_digest_n = SHA256(chain_digest_{n-1}, request, response, state)
+Genesis value: "GENESIS"
+
+Chain integrity can be verified at any time:
+  GET /finance/chain/verify
+
+This endpoint walks the full receipt_log, recomputes each chain_digest
+from its stored payload_json, and verifies the prev_chain_digest linkage.
+Returns { valid, checked, head } or { valid: false, failed_at, reason }.
 
 ---
 
 ## Cryptographic Signing
 
+### Chain signing
 Qasim signs the chain head using Ed25519.
+The signing key is loaded from the environment at startup — never hardcoded.
 
-Headers:
+Required:
+  export QASIM_CHAIN_SECRET_HEX=$(openssl rand -hex 32)
 
+Response headers:
 - X-Qasim-Chain-Digest
-- X-Qasim-Chain-Public-Key
 - X-Qasim-Chain-Signature
-
----
-
-## HTTP Witnessing
-
-Each response includes:
-
+- X-Qasim-Chain-Public-Key
 - X-Qasim-Request-Digest
 - X-Qasim-Response-Digest
 
-These are canonical digests at the handler boundary.
+### Payload signing
+All ingest payloads are verified via Ed25519 before storage.
+Use pk_hex = "DEV" to bypass verification in development.
 
----
-
-## Implemented
-
-- deterministic state
-- time-indexed state (state_at / export_at)
-- canonical risk_state
-- multi-source price aggregation
-- append-only receipt chain
-- Ed25519 chain signing
-- instrument-level scenarios
-- named scenario libraries (versioned)
+### Live feed signing
+Live price ingestion uses HMAC-SHA256 (symmetric). The signing_secret_hex
+is provided per-request. This is weaker than asymmetric signing — the
+verifier must hold the secret.
 
 ---
 
 ## Limitations
 
-- mean consensus (no weighting yet)
-- no trimmed mean
-- no URL decoding
-- HMAC used for live feed ingestion
-- limited asset coverage
-
----
-
-## Future Extensions
-
-- weighted consensus
-- trimmed mean
-- signature verification on read
-- URL decoding
-- multi-asset expansion
-- matching / clearing engine
-- full FARD execution receipts per request
-
----
-
-- Mean used instead of median (no sort in stdlib)
-- No weighting across sources
-- No URL decoding (e.g. %2F)
-- HMAC signing for live feeds (not asymmetric)
+- Mean consensus only (no weighted mean, no trimmed mean — no sort in stdlib)
+- Median not computable — returned as null in aggregate response
+- No URL decoding (e.g. %2F in path parameters)
+- HMAC for live feed signing (not asymmetric)
+- Limited asset coverage
+- Live /finance/position/ digest not time-anchored (as_of_ts: null)
 
 ---
 
@@ -349,18 +275,21 @@ These are canonical digests at the handler boundary.
 - Multi-asset support
 - Matching / clearing engine
 - FARD receipts per request
+- Time-anchored live position digest
 
 ---
 
 ## Running
 
-Start server:
+Generate a signing key and start the server:
 
-~/FARD/target/release/fardrun run --program main.fard --out /tmp/qasim
+  export QASIM_CHAIN_SECRET_HEX=$(openssl rand -hex 32)
+  ~/FARD/target/release/fardrun run --program main.fard --out /tmp/qasim
 
-Server:
+Server: http://0.0.0.0:9801
 
-http://0.0.0.0:9801
+The signing key must be preserved across restarts to maintain chain
+signature continuity. Store it in a secrets manager for production use.
 
 ---
 
@@ -376,114 +305,3 @@ Qasim follows FARD principles:
 This is not an API.
 
 This is a verifiable financial system.
-
----
-
-## Time-Indexed State (NEW)
-
-### Price Staleness (NEW)
-
-Qasim enforces an explicit freshness constraint on price data.
-
-#### Parameter
-
-MAX_PRICE_AGE = 300  (seconds)
-
-#### Rule
-
-A price is considered valid at time t only if:
-
-- ts_unix ≤ t
-- (t - ts_unix) ≤ MAX_PRICE_AGE
-
-Otherwise the price is discarded.
-
-#### Effect
-
-- Stale prices are not used in valuation
-- Positions remain, but value becomes null
-- NAV excludes assets with stale pricing
-
-#### Example
-
-At time t = 1731000500
-
-Latest price ts = 1731000120
-
-Δ = 380 > 300 → price is stale
-
-Result:
-
-qty = 6
-price = null
-value = null
-nav = 0
-
-This ensures economic correctness and prevents outdated data from influencing state.
-
----
-
-## Time-Indexed State (NEW)
-
-Qasim now supports deterministic state evaluation at any time t.
-
-### Endpoint
-
-GET /finance/state_at/<account>/<ts_unix>
-
-### Behavior
-
-State is computed using only data ≤ t:
-
-- tx where ts_unix ≤ t
-- price_claims where ts_unix ≤ t
-
-No forward-looking data is ever used.
-
-### Properties
-
-- Time-consistent valuation
-- No lookahead bias
-- Missing prices remain null (no implicit fill)
-- State digest includes as_of_ts
-
-### Example
-
-Before price arrival:
-
-qty = 10
-price = null
-nav = 0
-
-After price + second tx:
-
-qty = 6
-price = 171
-nav = 1026
-
-### Export at time
-
-GET /finance/export_at/<account>/<ts_unix>
-
-Returns full replayable state at time t.
-
-### Replay with time
-
-POST /finance/replay
-
-Optional field:
-
-as_of_ts
-
-This constrains replay to historical cutoff.
-
-### Guarantee
-
-State is a pure function:
-
-state(t) = f(tx≤t, price≤t)
-
-Digest changes with time.
-
----
-
