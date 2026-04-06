@@ -169,8 +169,9 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
       computed
   let fx_rates = state_mod.fx_rates_from_prices(prices, prices_mod)
   let nav_usd = state_mod.nav_usd_of(positions, cash, fx_rates)
+  let risk_state_var = state_mod.risk_state_with_var(positions, state_mod.cash_balance_of(cash), prices)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, now)
-  ok_json({ account: account, as_of_ts: now, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
+  ok_json({ account: account, as_of_ts: now, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/state_at/"
@@ -563,23 +564,25 @@ fn post_price_h(req, ctx) {
   if payload_json == "" then err_json_h(400, "missing payload_json")
   else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
-  else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
-  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < (if rec.has(p, "ts_unix") then rec.get(p, "ts_unix") else 0) then err_json_h(400, "ts_unix is in the future")
   else
+    let pp = json.decode(payload_json) in
+    if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
+    else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < (if rec.has(pp, "ts_unix") then rec.get(pp, "ts_unix") else 0) then err_json_h(400, "ts_unix is in the future")
+    else
     let d = hex_digest_h(payload_json) in
     let _ = sqlite.exec(db, str.concat([
       "INSERT OR IGNORE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
       d, "','",
-      (if rec.has(p, "symbol") then rec.get(p, "symbol") else ""), "',",
-      str.from(if rec.has(p, "mid") then rec.get(p, "mid") else 0), ",'",
-      (if rec.has(p, "venue") then rec.get(p, "venue") else ""), "',",
+      (if rec.has(pp, "symbol") then rec.get(pp, "symbol") else ""), "',",
+      str.from(if rec.has(pp, "mid") then rec.get(pp, "mid") else 0), ",'",
+      (if rec.has(pp, "venue") then rec.get(pp, "venue") else ""), "',",
       str.from(if rec.has(p, "ts_unix") then rec.get(p, "ts_unix") else 0), ",'",
       issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
     ])) in
     let _ = sqlite.exec(db, str.concat([
       "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES (",
       "'", d, "','price_claim',NULL,'",
-      (if rec.has(p, "symbol") then rec.get(p, "symbol") else ""), "',",
+      (if rec.has(pp, "symbol") then rec.get(pp, "symbol") else ""), "',",
       str.from(if rec.has(p, "ts_unix") then rec.get(p, "ts_unix") else 0), ",'",
       issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
     ])) in

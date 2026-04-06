@@ -1,3 +1,4 @@
+import("std/cast") as cast
 import("std/str") as str
 import("std/list") as list
 import("std/rec") as rec
@@ -107,7 +108,61 @@ fn max_abs_weight_of(items) {
   })
 }
 
+
+fn returns_from_prices(price_rows, symbol) {
+  let rows = list.filter(price_rows, fn(r) { r.symbol == symbol })
+  let sorted = list.sort_by(rows, fn(a, b) { a.ts_unix - b.ts_unix })
+  let n = list.len(sorted)
+  if n < 2 then []
+  else
+    let pairs = list.fold(sorted, { prev: null, returns: [] }, fn(acc, r) {
+      if acc.prev == null then { prev: r.mid, returns: [] }
+      else if acc.prev == 0 then { prev: r.mid, returns: acc.returns }
+      else
+        let ret = (cast.float(r.mid) - cast.float(acc.prev)) / cast.float(acc.prev) in
+        { prev: r.mid, returns: list.append(acc.returns, ret) }
+    }) in
+    pairs.returns
+}
+
+fn stddev_of(values) {
+  let n = list.len(values)
+  if n < 2 then null
+  else
+    let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in
+    let mean = cast.float(sum) / cast.float(n) in
+    let sq_sum = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) in
+    let variance = cast.float(sq_sum) / cast.float(n - 1) in
+    if variance < 0 then null
+    else variance
+}
+
+fn var_of(position_value, volatility, z_score) {
+  if position_value == null then null
+  else if volatility == null then null
+  else
+    let abs_val = if position_value < 0 then 0 - position_value else position_value in
+    abs_val * volatility * z_score
+}
+
+fn position_var(p, price_rows, prices_mod) {
+  if p.value == null then { var_95: null, var_99: null, volatility: null }
+  else
+    let sym = str.concat([p.instrument, "/USD"]) in
+    let rets = returns_from_prices(price_rows, sym) in
+    let vol = stddev_of(rets) in
+    {
+      var_95: var_of(p.value, vol, 1.645),
+      var_99: var_of(p.value, vol, 2.326),
+      volatility: vol
+    }
+}
+
 fn risk_state_of(positions, cash_balance) {
+  risk_state_with_var(positions, cash_balance, [])
+}
+
+fn risk_state_with_var(positions, cash_balance, price_rows) {
   let nav = nav_of(positions, cash_balance)
   let gross = gross_exposure_of(positions)
   let net = net_exposure_of(positions)
@@ -116,16 +171,22 @@ fn risk_state_of(positions, cash_balance) {
   let position_risk = list.map(positions, fn(p) {
     let weight = weight_of(p.value, gross)
     let abs_value = if p.value == null then null else if p.value < 0 then 0 - p.value else p.value
+    let pvar = position_var(p, price_rows, null)
     {
       instrument: p.instrument,
       qty: p.qty,
       price: p.price,
       value: p.value,
       abs_value: abs_value,
-      weight: weight
+      weight: weight,
+      var_95: pvar.var_95,
+      var_99: pvar.var_99,
+      volatility: pvar.volatility
     }
   })
   let concentration = max_abs_weight_of(position_risk)
+  let portfolio_var_95 = list.fold(position_risk, 0, fn(acc, p) { if p.var_95 == null then acc else acc + p.var_95 })
+  let portfolio_var_99 = list.fold(position_risk, 0, fn(acc, p) { if p.var_99 == null then acc else acc + p.var_99 })
   {
     nav: nav,
     cash_balance: cash_balance,
@@ -135,6 +196,8 @@ fn risk_state_of(positions, cash_balance) {
     short_exposure: short_exposure,
     leverage: if nav == 0 then null else gross / nav,
     concentration: concentration,
+    portfolio_var_95: portfolio_var_95,
+    portfolio_var_99: portfolio_var_99,
     positions: position_risk
   }
 }
@@ -259,6 +322,10 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   cash_balance_of: cash_balance_of,
   nav_of: nav_of,
   risk_state_of: risk_state_of,
+  risk_state_with_var: risk_state_with_var,
+  position_var: position_var,
+  returns_from_prices: returns_from_prices,
+  stddev_of: stddev_of,
   state_payload_from_objects: state_payload_from_objects,
   state_receipt_from_objects: state_receipt_from_objects
 }
