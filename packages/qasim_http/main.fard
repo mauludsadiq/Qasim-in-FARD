@@ -121,14 +121,14 @@ fn tx_rows_for_account_at(db, account, ts_unix_cutoff) {
 
 fn price_aggregate(req, db, prices_mod, ok_json) {
   let prefix = "/finance/price/aggregate/"
-  let symbol = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let symbol = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let rows = prices_mod.latest_price_rows(db)
   ok_json(prices_mod.aggregate_symbol_prices(rows, symbol))
 }
 
 fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let prefix = "/finance/position/"
-  let account = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let fills = fill_rows_for_account(db, account)
   let cash = cash_rows_for_account(db, account)
   let now = current_ts(db)
@@ -140,7 +140,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json) {
 
 fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/state_at/"
-  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let rest = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let parts = str.split(rest, "/")
   let account = if list.len(parts) > 0 then parts[0] else ""
   let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
@@ -158,7 +158,7 @@ fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
 
 fn export_account(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let prefix = "/finance/export/"
-  let account = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let fills = fill_rows_for_account(db, account)
   let cash = cash_rows_for_account(db, account)
   let now = current_ts(db)
@@ -170,7 +170,7 @@ fn export_account(req, db, prices_mod, state_mod, max_price_age, ok_json) {
 
 fn export_account_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/export_at/"
-  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let rest = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let parts = str.split(rest, "/")
   let account = if list.len(parts) > 0 then parts[0] else ""
   let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
@@ -218,7 +218,7 @@ fn parse_shock_map(shock_text) {
 
 fn state_payload_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/state_payload/"
-  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let rest = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let parts = str.split(rest, "/")
   let account = if list.len(parts) > 0 then parts[0] else ""
   let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
@@ -235,7 +235,7 @@ fn state_payload_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_
 
 fn scenario_at(req, db, prices_mod, state_mod, scenario_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/scenario_at/"
-  let rest = str.slice(req.path, str.len(prefix), str.len(req.path))
+  let rest = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
   let parts = str.split(rest, "/")
   let account = if list.len(parts) > 0 then parts[0] else ""
   let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else ""
