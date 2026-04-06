@@ -170,7 +170,9 @@ fn percentile_of(sorted_values, pct) {
 fn historical_var_of(position_value, price_rows, symbol) {
   if position_value == null then { hvar_95: null, hvar_99: null, n_returns: 0 }
   else
-    let rets = returns_from_prices(price_rows, symbol) in
+    let all_rets = returns_from_prices(price_rows, symbol) in
+    let all_n = list.len(all_rets) in
+    let rets = if all_n > 252 then list.drop(all_rets, all_n - 252) else all_rets in
     let n = list.len(rets) in
     if n < 10 then { hvar_95: null, hvar_99: null, n_returns: n }
     else
