@@ -485,12 +485,12 @@ fn post_live_price_h(req, ctx) {
   let url = if rec.has(body, "url") then rec.get(body, "url") else "" in
   let feed_type = if rec.has(body, "feed_type") then rec.get(body, "feed_type") else "simple_json" in
   let issuer_pk_hex = if rec.has(body, "issuer_pk_hex") then rec.get(body, "issuer_pk_hex") else "" in
-  let signing_secret_hex = if rec.has(body, "signing_secret_hex") then rec.get(body, "signing_secret_hex") else "" in
+  let issuer_secret_hex = if rec.has(body, "issuer_secret_hex") then rec.get(body, "issuer_secret_hex") else "" in
   if symbol == "" then err_json_h(400, "missing symbol")
   else if venue == "" then err_json_h(400, "missing venue")
   else if url == "" then err_json_h(400, "missing url")
   else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
-  else if signing_secret_hex == "" then err_json_h(400, "missing signing_secret_hex")
+  else if issuer_secret_hex == "" then err_json_h(400, "missing issuer_secret_hex")
   else
     let resp = ctx.http.get(url) in
     let src = json.decode(resp.body) in
@@ -509,7 +509,8 @@ fn post_live_price_h(req, ctx) {
       let receipt = { source_url: url, source_body_digest: source_body_digest, feed_type: feed_type, symbol: symbol, venue: venue, mid: mid, ts_unix: ts_unix } in
       let receipt_json = json.canonicalize(receipt) in
       let receipt_digest = hash.sha256_text(receipt_json) in
-      let sig_hex = ctx.crypto.hmac_sha256(signing_secret_hex, receipt_json) in
+      let msg_hex = ctx.bytes.to_hex(ctx.bytes.of_str(receipt_json)) in
+      let sig_hex = ctx.crypto.ed25519_sign(issuer_secret_hex, msg_hex) in
       let sig_b64 = ctx.b64.encode(ctx.bytes.from_hex(sig_hex)) in
       let _ = sqlite.exec(db, str.concat([
         "INSERT OR IGNORE INTO price_claims (digest,symbol,mid,venue,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
