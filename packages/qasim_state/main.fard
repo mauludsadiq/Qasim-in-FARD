@@ -10,7 +10,6 @@ fn value_position(qty, price, meta) {
   else
     let asset_class = if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
     let multiplier = if rec.has(meta, "multiplier") then meta.multiplier else 1 in
-    let currency = if rec.has(meta, "currency") then meta.currency else "USD" in
     if asset_class == "equity" then qty * price * multiplier
     else if asset_class == "future" then qty * price * multiplier
     else if asset_class == "option" then qty * price * multiplier
@@ -52,7 +51,6 @@ fn positions_from_fills_with_meta(fill_rows, price_rows, prices_mod, inst_rows) 
     let value = value_position(qty, price, meta) in
     let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
     { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class }
-  })
   })
 }
 

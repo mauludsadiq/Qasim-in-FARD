@@ -145,7 +145,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let cash = cash_rows_for_account(db, account)
   let now = current_ts(db)
   let prices = prices_mod.price_rows_at(db, now, max_price_age)
-  let inst_rows = instrument_rows(db) in
+  let inst_rows = instrument_rows(db)
   let positions = state_mod.positions_from_fills_with_meta(fills, prices, prices_mod, inst_rows)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
   ok_json({ account: account, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
@@ -177,7 +177,7 @@ fn export_account(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let cash = cash_rows_for_account(db, account)
   let now = current_ts(db)
   let prices = prices_mod.price_rows_at(db, now, max_price_age)
-  let inst_rows = instrument_rows(db) in
+  let inst_rows = instrument_rows(db)
   let positions = state_mod.positions_from_fills_with_meta(fills, prices, prices_mod, inst_rows)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
   ok_json({ account: account, fills: fills, cash: cash, prices: prices, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
@@ -210,7 +210,7 @@ fn replay(req, state_mod, ok_json) {
   let as_of_ts = if rec.has(body, "as_of_ts") then rec.get(body, "as_of_ts") else null
   let tx_rows2 = if as_of_ts == null then tx_rows else list.filter(tx_rows, fn(r) { r.ts_unix <= as_of_ts })
   let price_rows2 = if as_of_ts == null then price_rows else list.filter(price_rows, fn(r) { r.ts_unix <= as_of_ts })
-  let inst_rows = instrument_rows(db) in
+  let inst_rows = instrument_rows(db)
   let positions = state_mod.positions_from_fills_with_meta(tx_rows2, price_rows2, qasim_prices, inst_rows)
   let payload = {
     account: account,
