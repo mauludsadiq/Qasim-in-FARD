@@ -107,6 +107,19 @@ let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS fills (
 
 let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_fills_account_ts ON fills(account, ts_unix)")
 
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS object_store (
+  digest TEXT PRIMARY KEY,
+  object_type TEXT NOT NULL,
+  account TEXT,
+  instrument TEXT,
+  ts_unix INTEGER,
+  issuer_pk_hex TEXT NOT NULL,
+  sig_b64 TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+)")
+
+let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_object_store_type_account_ts ON object_store(object_type, account, ts_unix)")
+
 fn ok_json(v) {
   { status: 200, headers: { "Content-Type": "application/json" }, body: json.encode(v) }
 }
@@ -165,7 +178,8 @@ fn post_tx(req) {
       sig_b64, "','",
       payload_json, "')"
     ])) in
-    ok_json({ digest: d })
+    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", d, "'", ", 'price_claim', NULL, '", require_text(p, "symbol"), "',", str.from(require_num(p, "ts_unix")), ", '", issuer_pk_hex, "', '", sig_b64, "', '", payload_json, "'", ")"])) in
+      ok_json({ digest: d })
 }
 
 fn post_cash(req) {
@@ -198,7 +212,8 @@ fn post_cash(req) {
       sig_b64, "'", ", '",
       payload_json, "'", ")"
     ])) in
-    ok_json({ object_type: obj.object_type, digest: obj.digest })
+    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", NULL,", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
+      ok_json({ object_type: obj.object_type, digest: obj.digest })
 }
 
 fn post_order(req) {
@@ -239,7 +254,8 @@ fn post_order(req) {
       sig_b64, "'", ", '",
       payload_json, "'", ")"
     ])) in
-    ok_json({ object_type: obj.object_type, digest: obj.digest })
+    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", '", obj.payload.instrument, "'", ",", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
+      ok_json({ object_type: obj.object_type, digest: obj.digest })
 }
 
 fn post_fill(req) {
@@ -280,7 +296,8 @@ fn post_fill(req) {
       sig_b64, "'", ", '",
       payload_json, "'", ")"
     ])) in
-    ok_json({ object_type: obj.object_type, digest: obj.digest })
+    let _ = sqlite.exec(db, str.concat(["INSERT OR REPLACE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('", obj.digest, "'", ", '", obj.object_type, "'", ", '", obj.payload.account, "'", ", '", obj.payload.instrument, "'", ",", str.from(obj.payload.ts_unix), ", '", issuer_pk_hex, "'", ", '", sig_b64, "'", ", '", payload_json, "'", ")"])) in
+      ok_json({ object_type: obj.object_type, digest: obj.digest })
 }
 
 fn post_price(req) {

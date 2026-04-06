@@ -21,6 +21,18 @@ fn signed_object(object_type, payload, issuer_pk_hex, sig_b64) {
   }
 }
 
+fn instrument(instrument_id, asset_class, symbol, currency, venue, multiplier, expiry_ts_unix, issuer_pk_hex, sig_b64) {
+  signed_object("instrument", {
+    instrument_id: instrument_id,
+    asset_class: asset_class,
+    symbol: symbol,
+    currency: currency,
+    venue: venue,
+    multiplier: multiplier,
+    expiry_ts_unix: expiry_ts_unix
+  }, issuer_pk_hex, sig_b64)
+}
+
 fn cash(account, currency, amount, ts_unix, issuer_pk_hex, sig_b64) {
   signed_object("cash", {
     account: account,
@@ -56,10 +68,70 @@ fn fill(fill_id, order_id, account, instrument, side, qty, price, ts_unix, issue
   }, issuer_pk_hex, sig_b64)
 }
 
+fn price_claim(symbol, mid, venue, ts_unix, issuer_pk_hex, sig_b64) {
+  signed_object("price_claim", {
+    symbol: symbol,
+    mid: mid,
+    venue: venue,
+    ts_unix: ts_unix
+  }, issuer_pk_hex, sig_b64)
+}
+
+fn corporate_action(action_id, instrument, action_type, ex_ts_unix, effective_ts_unix, ratio_num, ratio_den, cash_amount, currency, issuer_pk_hex, sig_b64) {
+  signed_object("corporate_action", {
+    action_id: action_id,
+    instrument: instrument,
+    action_type: action_type,
+    ex_ts_unix: ex_ts_unix,
+    effective_ts_unix: effective_ts_unix,
+    ratio_num: ratio_num,
+    ratio_den: ratio_den,
+    cash_amount: cash_amount,
+    currency: currency
+  }, issuer_pk_hex, sig_b64)
+}
+
+fn counterparty(counterparty_id, name, domicile, rating, issuer_pk_hex, sig_b64) {
+  signed_object("counterparty", {
+    counterparty_id: counterparty_id,
+    name: name,
+    domicile: domicile,
+    rating: rating
+  }, issuer_pk_hex, sig_b64)
+}
+
+fn portfolio(portfolio_id, account, base_currency, legal_entity, strategy, issuer_pk_hex, sig_b64) {
+  signed_object("portfolio", {
+    portfolio_id: portfolio_id,
+    account: account,
+    base_currency: base_currency,
+    legal_entity: legal_entity,
+    strategy: strategy
+  }, issuer_pk_hex, sig_b64)
+}
+
+fn collateral(collateral_id, account, counterparty_id, collateral_type, amount, currency, ts_unix, issuer_pk_hex, sig_b64) {
+  signed_object("collateral", {
+    collateral_id: collateral_id,
+    account: account,
+    counterparty_id: counterparty_id,
+    collateral_type: collateral_type,
+    amount: amount,
+    currency: currency,
+    ts_unix: ts_unix
+  }, issuer_pk_hex, sig_b64)
+}
+
 {
   canonical_digest: canonical_digest,
   signed_object: signed_object,
+  instrument: instrument,
   cash: cash,
   order: order,
-  fill: fill
+  fill: fill,
+  price_claim: price_claim,
+  corporate_action: corporate_action,
+  counterparty: counterparty,
+  portfolio: portfolio,
+  collateral: collateral
 }

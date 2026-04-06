@@ -1,0 +1,21 @@
+import("../packages/qasim_objects/main") as obj
+
+let inst = obj.instrument("INST-AAPL", "equity", "AAPL", "USD", "NASDAQ", 1, null, "pk1", "sig1")
+let px = obj.price_claim("AAPL/USD", 171, "NASDAQ", 1731000202, "pk1", "sig1")
+let ca = obj.corporate_action("CA-1", "AAPL", "split", 1732000000, 1732000000, 2, 1, 0, "USD", "pk1", "sig1")
+let cp = obj.counterparty("CP-1", "Goldman Sachs", "US", "A", "pk1", "sig1")
+let pf = obj.portfolio("PF-1", "ACCT-123", "USD", "Qasim Capital LLC", "long_only", "pk1", "sig1")
+let col = obj.collateral("COL-1", "ACCT-123", "CP-1", "cash", 500000, "USD", 1731000202, "pk1", "sig1")
+
+test "instrument object type" { inst.object_type == "instrument" }
+test "instrument symbol" { inst.payload.symbol == "AAPL" }
+test "price claim object type" { px.object_type == "price_claim" }
+test "price claim symbol" { px.payload.symbol == "AAPL/USD" }
+test "corporate action object type" { ca.object_type == "corporate_action" }
+test "corporate action ratio" { ca.payload.ratio_num == 2 && ca.payload.ratio_den == 1 }
+test "counterparty object type" { cp.object_type == "counterparty" }
+test "counterparty name" { cp.payload.name == "Goldman Sachs" }
+test "portfolio object type" { pf.object_type == "portfolio" }
+test "portfolio base currency" { pf.payload.base_currency == "USD" }
+test "collateral object type" { col.object_type == "collateral" }
+test "collateral amount" { col.payload.amount == 500000 }

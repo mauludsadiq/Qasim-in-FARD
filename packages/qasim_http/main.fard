@@ -5,39 +5,95 @@ import("std/json") as json
 import("std/hash") as hash
 import("std/sqlite") as sqlite
 fn fill_rows_for_account(db, account) {
-  sqlite.query(db, str.concat([
-    "SELECT digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM fills WHERE account='",
+  list.map(sqlite.query(db, str.concat([
+    "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='fill' AND account='",
     account,
     "' ORDER BY ts_unix, digest"
-  ]))
+  ])), fn(r) {
+    let p = json.decode(r.payload_json)
+    {
+      digest: r.digest,
+      fill_id: p.fill_id,
+      order_id: p.order_id,
+      account: p.account,
+      instrument: p.instrument,
+      side: p.side,
+      qty: p.qty,
+      price: p.price,
+      ts_unix: p.ts_unix,
+      issuer_pk_hex: r.issuer_pk_hex,
+      sig_b64: r.sig_b64,
+      payload_json: r.payload_json
+    }
+  })
 }
 
 fn fill_rows_for_account_at(db, account, ts_unix_cutoff) {
-  sqlite.query(db, str.concat([
-    "SELECT digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM fills WHERE account='",
+  list.map(sqlite.query(db, str.concat([
+    "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='fill' AND account='",
     account,
     "' AND ts_unix<=",
     str.from(ts_unix_cutoff),
     " ORDER BY ts_unix, digest"
-  ]))
+  ])), fn(r) {
+    let p = json.decode(r.payload_json)
+    {
+      digest: r.digest,
+      fill_id: p.fill_id,
+      order_id: p.order_id,
+      account: p.account,
+      instrument: p.instrument,
+      side: p.side,
+      qty: p.qty,
+      price: p.price,
+      ts_unix: p.ts_unix,
+      issuer_pk_hex: r.issuer_pk_hex,
+      sig_b64: r.sig_b64,
+      payload_json: r.payload_json
+    }
+  })
 }
 
 fn cash_rows_for_account(db, account) {
-  sqlite.query(db, str.concat([
-    "SELECT digest,account,currency,amount,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM cash_objects WHERE account='",
+  list.map(sqlite.query(db, str.concat([
+    "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='cash' AND account='",
     account,
     "' ORDER BY ts_unix, digest"
-  ]))
+  ])), fn(r) {
+    let p = json.decode(r.payload_json)
+    {
+      digest: r.digest,
+      account: p.account,
+      currency: p.currency,
+      amount: p.amount,
+      ts_unix: p.ts_unix,
+      issuer_pk_hex: r.issuer_pk_hex,
+      sig_b64: r.sig_b64,
+      payload_json: r.payload_json
+    }
+  })
 }
 
 fn cash_rows_for_account_at(db, account, ts_unix_cutoff) {
-  sqlite.query(db, str.concat([
-    "SELECT digest,account,currency,amount,ts_unix,issuer_pk_hex,sig_b64,payload_json FROM cash_objects WHERE account='",
+  list.map(sqlite.query(db, str.concat([
+    "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='cash' AND account='",
     account,
     "' AND ts_unix<=",
     str.from(ts_unix_cutoff),
     " ORDER BY ts_unix, digest"
-  ]))
+  ])), fn(r) {
+    let p = json.decode(r.payload_json)
+    {
+      digest: r.digest,
+      account: p.account,
+      currency: p.currency,
+      amount: p.amount,
+      ts_unix: p.ts_unix,
+      issuer_pk_hex: r.issuer_pk_hex,
+      sig_b64: r.sig_b64,
+      payload_json: r.payload_json
+    }
+  })
 }
 
 fn tx_rows_for_account(db, account) {

@@ -2,18 +2,34 @@ import("std/sqlite") as sqlite
 import("std/str") as str
 import("std/list") as list
 import("std/rec") as rec
+import("std/json") as json
+
+fn decode_price_rows(rows) {
+  list.map(rows, fn(r) {
+    let p = json.decode(r.payload_json)
+    {
+      symbol: p.symbol,
+      mid: p.mid,
+      venue: p.venue,
+      ts_unix: p.ts_unix,
+      digest: r.digest,
+      issuer_pk_hex: r.issuer_pk_hex,
+      sig_b64: r.sig_b64,
+      payload_json: r.payload_json
+    }
+  })
+}
+
 fn latest_price_rows(db) {
-  sqlite.query(db, "SELECT symbol,mid,venue,ts_unix,digest,issuer_pk_hex,sig_b64,payload_json
-                    FROM price_claims
-                    ORDER BY symbol, ts_unix, digest")
+  decode_price_rows(sqlite.query(db, "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='price_claim' ORDER BY ts_unix, digest"))
 }
 
 fn price_rows_at(db, ts_unix_cutoff, max_price_age) {
-  let rows = sqlite.query(db, str.concat([
-    "SELECT symbol,mid,venue,ts_unix,digest,issuer_pk_hex,sig_b64,payload_json FROM price_claims WHERE ts_unix<=",
+  let rows = decode_price_rows(sqlite.query(db, str.concat([
+    "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='price_claim' AND ts_unix<=",
     str.from(ts_unix_cutoff),
-    " ORDER BY symbol, ts_unix, digest"
-  ]))
+    " ORDER BY ts_unix, digest"
+  ])))
   list.filter(rows, fn(r) { (ts_unix_cutoff - r.ts_unix) <= max_price_age })
 }
 
@@ -37,8 +53,6 @@ fn consensus_price(price_rows, symbol) {
   agg.median
 }
 
-
-{ latest_price_rows: latest_price_rows, price_rows_at: price_rows_at, aggregate_symbol_prices: aggregate_symbol_prices, aggregate_all_prices: aggregate_all_prices, consensus_price: consensus_price }
 {
   latest_price_rows: latest_price_rows,
   price_rows_at: price_rows_at,
@@ -46,4 +60,3 @@ fn consensus_price(price_rows, symbol) {
   aggregate_all_prices: aggregate_all_prices,
   consensus_price: consensus_price
 }
-
