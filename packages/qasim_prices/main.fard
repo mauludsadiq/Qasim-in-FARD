@@ -38,7 +38,7 @@ fn aggregate_symbol_prices(price_rows, symbol) {
   let values = list.map(rows, fn(r) { r.mid })
   let n = list.len(values)
   if n == 0 then { symbol: symbol, median: null, mean: null, variance: null, outliers: [], sources: [] }
-  else let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in let mean = sum / n in let variance = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) / n in let threshold = variance * 4 in let outliers = list.filter(rows, fn(r) { let d = r.mid - mean in (d * d) > threshold }) in { symbol: symbol, median: mean, mean: mean, variance: variance, outliers: outliers, sources: rows }
+  else let sum = list.fold(values, 0, fn(acc, x) { acc + x }) in let mean = sum / n in let variance = list.fold(values, 0, fn(acc, x) { let d = x - mean in acc + (d * d) }) / n in let threshold = variance * 4 in let outliers = list.filter(rows, fn(r) { let d = r.mid - mean in (d * d) > threshold }) in { symbol: symbol, median: null, mean: mean, variance: variance, outliers: outliers, sources: rows }
 }
 
 fn aggregate_all_prices(price_rows) {
