@@ -751,6 +751,16 @@ fn adapt_price_h(feed_type, src) {
       { ok: true, mid: (if rec.has(src.bpi.USD, "rate_float") then rec.get(src.bpi.USD, "rate_float") else 0), ts_unix: 0 }
     else
       { ok: false, error: "coindesk adapter missing bpi.USD.rate_float" }
+  else if feed_type == "yahoo" then
+    if rec.has(src, "chart") then
+      let results = src.chart.result in
+      if list.len(results) == 0 then { ok: false, error: "yahoo: empty result" }
+      else
+        let meta = results[0].meta in
+        let price = if rec.has(meta, "regularMarketPrice") then meta.regularMarketPrice else 0 in
+        let ts = if rec.has(meta, "regularMarketTime") then meta.regularMarketTime else 0 in
+        { ok: true, mid: price, ts_unix: ts }
+    else { ok: false, error: "yahoo: missing chart" }
   else
     { ok: false, error: str.concat(["unknown feed_type: ", feed_type]) }
 }
@@ -770,7 +780,9 @@ fn post_live_price_h(req, ctx) {
   else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
   else if issuer_secret_hex == "" then err_json_h(400, "missing issuer_secret_hex")
   else
-    let resp = ctx.http.get(url) in
+    let resp = if feed_type == "yahoo" then
+      ctx.http.request({ method: "GET", url: url, headers: { "User-Agent": "Mozilla/5.0" } })
+    else ctx.http.get(url) in
     let src = json.decode(resp.body) in
     let adapted = adapt_price_h(feed_type, src) in
     if !adapted.ok then err_json_h(400, adapted.error)

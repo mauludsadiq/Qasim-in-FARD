@@ -23,7 +23,7 @@ let chain_secret_hex_opt = env.get("QASIM_CHAIN_SECRET_HEX")
 let chain_secret_hex = if rec.has(chain_secret_hex_opt, "some") then chain_secret_hex_opt.some else ""
 let _ = if chain_secret_hex == "" then error("QASIM_CHAIN_SECRET_HEX is not set") else null
 
-let MAX_PRICE_AGE = 300
+let MAX_PRICE_AGE = 86400
 let db = sqlite.open(DB_PATH)
 
 let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS tx (
