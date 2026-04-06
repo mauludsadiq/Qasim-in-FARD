@@ -516,6 +516,13 @@ fn post_price_h(req, ctx) {
       str.from(if rec.has(p, "ts_unix") then rec.get(p, "ts_unix") else 0), ",'",
       issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
     ])) in
+    let _ = sqlite.exec(db, str.concat([
+      "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES (",
+      "'", d, "','price_claim',NULL,'",
+      (if rec.has(p, "symbol") then rec.get(p, "symbol") else ""), "',",
+      str.from(if rec.has(p, "ts_unix") then rec.get(p, "ts_unix") else 0), ",'",
+      issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
+    ])) in
     ok_json_h({ digest: d })
 }
 
