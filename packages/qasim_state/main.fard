@@ -169,10 +169,55 @@ fn state_receipt_from_objects(account, fill_rows, cash_rows, price_rows, positio
   }
 }
 
+
+fn fx_rates_from_prices(price_rows, prices_mod) {
+  let fx_rows = list.filter(price_rows, fn(r) { str.ends_with(r.symbol, "/USD") })
+  list.fold(fx_rows, {}, fn(acc, r) {
+    let parts = str.split(r.symbol, "/")
+    let base_currency = if list.len(parts) > 0 then parts[0] else ""
+    if base_currency == "" || base_currency == "USD" then acc
+    else
+      let rate = prices_mod.consensus_price(price_rows, r.symbol) in
+      if rate == null then acc
+      else rec.set(acc, base_currency, rate)
+  })
+}
+
+fn fx_rate_for(currency, fx_rates) {
+  if currency == "USD" then 1
+  else if rec.has(fx_rates, currency) then rec.get(fx_rates, currency)
+  else null
+}
+
+fn cash_balance_usd_of(cash_rows, fx_rates) {
+  list.fold(cash_rows, 0, fn(acc, r) {
+    let currency = if rec.has(r, "currency") then r.currency else "USD" in
+    let rate = fx_rate_for(currency, fx_rates) in
+    if rate == null then acc
+    else acc + (r.amount * rate)
+  })
+}
+
+fn nav_usd_of(positions, cash_rows, fx_rates) {
+  let cash_usd = cash_balance_usd_of(cash_rows, fx_rates) in
+  let positions_usd = list.fold(positions, 0, fn(acc, p) {
+    if p.value == null then acc
+    else
+      let currency = if rec.has(p, "currency") then p.currency else "USD" in
+      let rate = fx_rate_for(currency, fx_rates) in
+      if rate == null then acc
+      else acc + (p.value * rate)
+  }) in
+  cash_usd + positions_usd
+}
+
 {
   positions_from_fills: positions_from_fills,
   positions_from_fills_with_meta: positions_from_fills_with_meta,
   cash_balance_of: cash_balance_of,
+  cash_balance_usd_of: cash_balance_usd_of,
+  nav_usd_of: nav_usd_of,
+  fx_rates_from_prices: fx_rates_from_prices,
   nav_of: nav_of,
   risk_state_of: risk_state_of,
   state_payload_from_objects: state_payload_from_objects,

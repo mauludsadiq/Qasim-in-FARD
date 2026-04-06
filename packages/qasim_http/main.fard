@@ -158,8 +158,10 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
       let new_cache = rec.set(cache, cache_key, computed) in
       let _ = mutex_mod.unlock(position_cache, new_cache) in
       computed
+  let fx_rates = state_mod.fx_rates_from_prices(prices, prices_mod)
+  let nav_usd = state_mod.nav_usd_of(positions, cash, fx_rates)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, null)
-  ok_json({ account: account, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
+  ok_json({ account: account, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/state_at/"
