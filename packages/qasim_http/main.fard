@@ -175,6 +175,66 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, now)
   ok_json({ account: account, as_of_ts: now, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
+
+fn pretrade_h(req, ctx) {
+  let db = ctx.db in
+  let body = json.decode(req.body) in
+  let account = if rec.has(body, "account") then rec.get(body, "account") else "" in
+  let instrument = if rec.has(body, "instrument") then rec.get(body, "instrument") else "" in
+  let side = if rec.has(body, "side") then rec.get(body, "side") else "" in
+  let qty = if rec.has(body, "qty") then rec.get(body, "qty") else 0 in
+  let price = if rec.has(body, "price") then rec.get(body, "price") else 0 in
+  if account == "" then err_json_h(400, "missing account")
+  else if instrument == "" then err_json_h(400, "missing instrument")
+  else if side == "" then err_json_h(400, "missing side")
+  else if qty == 0 then err_json_h(400, "missing qty")
+  else
+    let now = current_ts(db) in
+    let fills = fill_rows_for_account(db, account) in
+    let cash = cash_rows_for_account(db, account) in
+    let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
+    let all_prices = ctx.qasim_prices.all_price_rows(db) in
+    let inst_rows = instrument_rows(db) in
+    let ca_rows = corporate_action_rows(db) in
+    let synthetic_fill = {
+      digest: "pretrade-synthetic",
+      fill_id: "pretrade",
+      order_id: "pretrade",
+      account: account,
+      instrument: instrument,
+      side: side,
+      qty: qty,
+      price: price,
+      ts_unix: now,
+      issuer_pk_hex: "pretrade",
+      sig_b64: "pretrade",
+      payload_json: "{}"
+    } in
+    let current_positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+    let hypo_fills = list.append(fills, synthetic_fill) in
+    let hypo_positions = ctx.qasim_state.positions_from_fills_with_actions(hypo_fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+    let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
+    let trade_cost = if side == "buy" then qty * price else 0 - (qty * price) in
+    let fx_rates = ctx.qasim_state.fx_rates_from_prices(prices, ctx.qasim_prices) in
+    let current_nav = ctx.qasim_state.nav_of(current_positions, cash_balance) in
+    let hypo_nav = ctx.qasim_state.nav_of(hypo_positions, cash_balance - trade_cost) in
+    let current_risk = ctx.qasim_state.risk_state_with_var(current_positions, cash_balance, all_prices) in
+    let hypo_risk = ctx.qasim_state.risk_state_with_var(hypo_positions, cash_balance - trade_cost, all_prices) in
+    ok_json_h({
+      account: account,
+      proposed: { instrument: instrument, side: side, qty: qty, price: price },
+      current: { nav: current_nav, cash_balance: cash_balance, risk_state: current_risk, positions: current_positions },
+      hypothetical: { nav: hypo_nav, cash_balance: cash_balance - trade_cost, risk_state: hypo_risk, positions: hypo_positions },
+      delta: {
+        nav: hypo_nav - current_nav,
+        cash_balance: 0 - trade_cost,
+        gross_exposure: hypo_risk.gross_exposure - current_risk.gross_exposure,
+        leverage: if current_risk.leverage == null then null else hypo_risk.leverage - current_risk.leverage,
+        concentration: if current_risk.concentration == null then null else hypo_risk.concentration - current_risk.concentration
+      }
+    })
+}
+
 fn state_at(req, db, prices_mod, state_mod, max_price_age, ok_json, err_json) {
   let prefix = "/finance/state_at/"
   let rest = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
@@ -768,6 +828,7 @@ fn handle(req, ctx) {
   else if req.path == "/finance/ingest/fill" then (if req.body == "" then err_json_h(400, "request body required") else post_fill_h(req, ctx))
   else if req.path == "/finance/price/claim" then (if req.body == "" then err_json_h(400, "request body required") else post_price_h(req, ctx))
   else if req.path == "/finance/live/price" then (if req.body == "" then err_json_h(400, "request body required") else post_live_price_h(req, ctx))
+  else if req.path == "/finance/pretrade" then (if req.body == "" then err_json_h(400, "request body required") else pretrade_h(req, ctx))
   else if req.path == "/finance/chain/verify" then verify_chain_h(ctx)
   else if req.path == "/finance/replay" then (if req.body == "" then err_json_h(400, "request body required") else replay(req, ctx.qasim_state, ok_json_h))
   else if str.starts_with(req.path, "/finance/price/aggregate/") then price_aggregate(req, ctx.db, ctx.qasim_prices, ok_json_h)
