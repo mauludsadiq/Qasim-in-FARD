@@ -16,6 +16,13 @@ fn instrument_meta(instrument_rows, instrument_id) {
   if rec.has(hit, "some") then hit.some else null
 }
 
+fn corporate_action_rows(db) {
+  list.map(
+    sqlite.query(db, "SELECT payload_json FROM object_store WHERE object_type='corporate_action' ORDER BY ts_unix, digest"),
+    fn(r) { json.decode(r.payload_json) }
+  )
+}
+
 fn current_ts(db) {
   let rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in
   rows[0].ts
@@ -146,15 +153,17 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let now = current_ts(db)
   let prices = prices_mod.price_rows_at(db, now, max_price_age)
   let inst_rows = instrument_rows(db)
+  let ca_rows = corporate_action_rows(db)
   let fill_key = list.fold(fills, "", fn(acc, r) { str.concat([acc, r.digest]) })
   let cash_key = list.fold(cash, "", fn(acc, r) { str.concat([acc, r.digest]) })
   let price_key = list.fold(prices, "", fn(acc, r) { str.concat([acc, r.digest]) })
-  let cache_key = hash.sha256_text(str.concat([account, fill_key, cash_key, price_key]))
+  let ca_key = list.fold(ca_rows, "", fn(acc, r) { if rec.has(r, "action_id") then str.concat([acc, r.action_id]) else acc })
+  let cache_key = hash.sha256_text(str.concat([account, fill_key, cash_key, price_key, ca_key]))
   let cache = mutex_mod.lock(position_cache)
   let cached = if rec.has(cache, cache_key) then rec.get(cache, cache_key) else null
   let positions = if cached != null then cached
     else
-      let computed = state_mod.positions_from_fills_with_meta(fills, prices, prices_mod, inst_rows) in
+      let computed = state_mod.positions_from_fills_with_actions(fills, prices, prices_mod, inst_rows, ca_rows, null) in
       let new_cache = rec.set(cache, cache_key, computed) in
       let _ = mutex_mod.unlock(position_cache, new_cache) in
       computed
@@ -394,6 +403,45 @@ fn post_instrument_h(req, ctx) {
       ok_json_h({ object_type: obj.object_type, digest: obj.digest, instrument_id: instrument_id })
 }
 
+
+fn post_corporate_action_h(req, ctx) {
+  let db = ctx.db in
+  let body = json.decode(req.body) in
+  let payload_json = if rec.has(body, "payload_json") then rec.get(body, "payload_json") else "" in
+  let issuer_pk_hex = if rec.has(body, "issuer_pk_hex") then rec.get(body, "issuer_pk_hex") else "" in
+  let sig_b64 = if rec.has(body, "sig_b64") then rec.get(body, "sig_b64") else "" in
+  if payload_json == "" then err_json_h(400, "missing payload_json")
+  else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
+  else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
+  else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
+  else
+    let p = json.decode(payload_json) in
+    let instrument = if rec.has(p, "instrument") then rec.get(p, "instrument") else "" in
+    let effective_ts_unix = if rec.has(p, "effective_ts_unix") then rec.get(p, "effective_ts_unix") else 0 in
+    if instrument == "" then err_json_h(400, "missing instrument")
+    else
+      let obj = ctx.qasim_objects.corporate_action(
+        (if rec.has(p, "action_id") then rec.get(p, "action_id") else ""),
+        instrument,
+        (if rec.has(p, "action_type") then rec.get(p, "action_type") else ""),
+        (if rec.has(p, "ex_ts_unix") then rec.get(p, "ex_ts_unix") else 0),
+        effective_ts_unix,
+        (if rec.has(p, "ratio_num") then rec.get(p, "ratio_num") else 1),
+        (if rec.has(p, "ratio_den") then rec.get(p, "ratio_den") else 1),
+        (if rec.has(p, "cash_amount") then rec.get(p, "cash_amount") else 0),
+        (if rec.has(p, "currency") then rec.get(p, "currency") else "USD"),
+        issuer_pk_hex, sig_b64
+      ) in
+      let _ = sqlite.exec(db, str.concat([
+        "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+        obj.digest, "','corporate_action',NULL,'",
+        instrument, "',",
+        str.from(effective_ts_unix), ",'",
+        issuer_pk_hex, "','", sig_b64, "','", payload_json, "')"
+      ])) in
+      ok_json_h({ object_type: obj.object_type, digest: obj.digest, instrument: instrument })
+}
+
 fn post_cash_h(req, ctx) {
   let db = ctx.db in
   let body = json.decode(req.body) in
@@ -615,6 +663,7 @@ fn verify_chain_h(ctx) {
 fn handle(req, ctx) {
   if req.path == "/health" then health_h()
   else if req.path == "/finance/ingest/instrument" then (if req.body == "" then err_json_h(400, "request body required") else post_instrument_h(req, ctx))
+  else if req.path == "/finance/ingest/corporate_action" then (if req.body == "" then err_json_h(400, "request body required") else post_corporate_action_h(req, ctx))
   else if req.path == "/finance/ingest/tx" then (if req.body == "" then err_json_h(400, "request body required") else post_tx_h(req, ctx))
   else if req.path == "/finance/ingest/cash" then (if req.body == "" then err_json_h(400, "request body required") else post_cash_h(req, ctx))
   else if req.path == "/finance/ingest/order" then (if req.body == "" then err_json_h(400, "request body required") else post_order_h(req, ctx))

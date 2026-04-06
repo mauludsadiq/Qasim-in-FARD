@@ -169,7 +169,6 @@ fn state_receipt_from_objects(account, fill_rows, cash_rows, price_rows, positio
   }
 }
 
-
 fn fx_rates_from_prices(price_rows, prices_mod) {
   let fx_rows = list.filter(price_rows, fn(r) { str.ends_with(r.symbol, "/USD") })
   list.fold(fx_rows, {}, fn(acc, r) {
@@ -211,13 +210,53 @@ fn nav_usd_of(positions, cash_rows, fx_rates) {
   cash_usd + positions_usd
 }
 
+fn apply_corporate_actions(qty, instrument, ca_rows, as_of_ts) {
+  let applicable = list.filter(ca_rows, fn(ca) {
+    ca.instrument == instrument &&
+    (as_of_ts == null || ca.effective_ts_unix <= as_of_ts)
+  })
+  let sorted = list.sort_by(applicable, fn(a, b) { a.effective_ts_unix - b.effective_ts_unix })
+  list.fold(sorted, qty, fn(acc, ca) {
+    let action_type = if rec.has(ca, "action_type") then ca.action_type else "" in
+    let ratio_num = if rec.has(ca, "ratio_num") then ca.ratio_num else 1 in
+    let ratio_den = if rec.has(ca, "ratio_den") then ca.ratio_den else 1 in
+    if action_type == "split" then
+      if ratio_den == 0 then acc else (acc * ratio_num) / ratio_den
+    else if action_type == "reverse_split" then
+      if ratio_num == 0 then acc else (acc * ratio_den) / ratio_num
+    else acc
+  })
+}
+
+fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_rows, ca_rows, as_of_ts) {
+  let qtys = list.fold(fill_rows, {}, fn(acc, r) {
+    let delta = if r.side == "buy" then r.qty else 0 - r.qty
+    if rec.has(acc, r.instrument) then rec.set(acc, r.instrument, rec.get(acc, r.instrument) + delta)
+    else rec.set(acc, r.instrument, delta)
+  })
+  let instruments = rec.keys(qtys)
+  list.map(instruments, fn(inst) {
+    let raw_qty = rec.get(qtys, inst) in
+    let qty = apply_corporate_actions(raw_qty, inst, ca_rows, as_of_ts) in
+    let hit = list.find(inst_rows, fn(r) { r.instrument_id == inst }) in
+    let meta = if rec.has(hit, "some") then hit.some else null in
+    let sym = price_symbol_for(inst, meta) in
+    let price = prices_mod.consensus_price(price_rows, sym) in
+    let value = value_position(qty, price, meta) in
+    let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class }
+  })
+}
+
 {
   positions_from_fills: positions_from_fills,
-  positions_from_fills_with_meta: positions_from_fills_with_meta,
-  cash_balance_of: cash_balance_of,
   cash_balance_usd_of: cash_balance_usd_of,
   nav_usd_of: nav_usd_of,
   fx_rates_from_prices: fx_rates_from_prices,
+  apply_corporate_actions: apply_corporate_actions,
+  positions_from_fills_with_actions: positions_from_fills_with_actions,
+  positions_from_fills_with_meta: positions_from_fills_with_meta,
+  cash_balance_of: cash_balance_of,
   nav_of: nav_of,
   risk_state_of: risk_state_of,
   state_payload_from_objects: state_payload_from_objects,
