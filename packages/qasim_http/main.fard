@@ -316,6 +316,16 @@ fn pretrade_h(req, ctx) {
     let hypo_nav = ctx.qasim_state.nav_of(hypo_positions, cash_balance - trade_cost) in
     let current_risk = ctx.qasim_state.risk_state_with_var(current_positions, cash_balance, all_prices) in
     let hypo_risk = ctx.qasim_state.risk_state_with_var(hypo_positions, cash_balance - trade_cost, all_prices) in
+    let rules = compliance_rule_rows(db, account) in
+    let current_compliance = ctx.qasim_state.evaluate_compliance(rules, current_positions, current_risk, now) in
+    let hypo_compliance = ctx.qasim_state.evaluate_compliance(rules, hypo_positions, hypo_risk, now) in
+    let new_breaches = list.filter(hypo_compliance.breaches, fn(hb) {
+      !rec.has(list.find(current_compliance.breaches, fn(cb) { cb.rule_id == hb.rule_id }), "some")
+    }) in
+    let resolved_breaches = list.filter(current_compliance.breaches, fn(cb) {
+      !rec.has(list.find(hypo_compliance.breaches, fn(hb) { hb.rule_id == cb.rule_id }), "some")
+    }) in
+    let compliance_delta = { new_breaches: new_breaches, resolved_breaches: resolved_breaches, trade_blocked: list.len(list.filter(new_breaches, fn(b) { b.severity == "hard" })) > 0 } in
     ok_json_h({
       account: account,
       proposed: { instrument: instrument, side: side, qty: qty, price: price },
@@ -327,7 +337,10 @@ fn pretrade_h(req, ctx) {
         gross_exposure: hypo_risk.gross_exposure - current_risk.gross_exposure,
         leverage: if current_risk.leverage == null then null else hypo_risk.leverage - current_risk.leverage,
         concentration: if current_risk.concentration == null then null else hypo_risk.concentration - current_risk.concentration
-      }
+      },
+      current_compliance: current_compliance,
+      hypo_compliance: hypo_compliance,
+      compliance_delta: compliance_delta
     })
 }
 
