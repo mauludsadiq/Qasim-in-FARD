@@ -1,0 +1,43 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/cast") as cast
+import("std/math") as math
+import("../packages/qasim_state/main") as state
+
+let now = 1000000
+let y1 = now + 31536000
+let y2 = now + 63072000
+let y3 = now + 94608000
+
+let flows = [
+  { flow_id: "CF1", asset_id: "PE-1", account: "ACCT-P", flow_type: "distribution", amount: 1000000, currency: "USD", expected_ts: y1 },
+  { flow_id: "CF2", asset_id: "PE-1", account: "ACCT-P", flow_type: "capital_call", amount: 500000, currency: "USD", expected_ts: y2 },
+  { flow_id: "CF3", asset_id: "PE-1", account: "ACCT-P", flow_type: "fee", amount: 10000, currency: "USD", expected_ts: y1 },
+  { flow_id: "CF4", asset_id: "PE-1", account: "ACCT-P", flow_type: "distribution", amount: 2000000, currency: "USD", expected_ts: y3 }
+]
+
+let past_flow = [
+  { flow_id: "CF5", asset_id: "PE-1", account: "ACCT-P", flow_type: "distribution", amount: 999999, currency: "USD", expected_ts: now - 1 }
+]
+
+let nav = state.dcf_nav_of(flows, 0.08, now)
+let summary = state.private_nav_summary(flows, 0.08, now)
+let past_nav = state.dcf_nav_of(past_flow, 0.08, now)
+let zero_nav = state.dcf_nav_of([], 0.08, now)
+
+test "dcf_nav positive for net distributions" { nav > 0.0 }
+test "dcf_nav excludes past flows" { past_nav == 0.0 }
+test "dcf_nav zero for empty flows" { zero_nav == 0.0 }
+test "summary flow_count correct" { summary.flow_count == 4 }
+test "summary pv_distributions positive" { summary.pv_distributions > 0.0 }
+test "summary pv_capital_calls positive" { summary.pv_capital_calls > 0.0 }
+test "summary pv_fees positive" { summary.pv_fees > 0.0 }
+test "summary nav equals dist minus calls minus fees" { summary.nav > 0.0 }
+test "distribution discounted less than face value" { summary.pv_distributions < 3000000.0 }
+test "capital call discounted less than face value" { summary.pv_capital_calls < 500000.0 }
+test "further flows discounted more" {
+  let pv_y1 = 1000000.0 / math.exp(0.08 * 1.0) in
+  let pv_y3 = 2000000.0 / math.exp(0.08 * 3.0) in
+  pv_y3 < pv_y1 * 2.0
+}
+test "discount_rate echoed in summary" { summary.discount_rate > 0.07 && summary.discount_rate < 0.09 }
