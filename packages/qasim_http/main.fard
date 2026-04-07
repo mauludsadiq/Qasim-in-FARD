@@ -155,16 +155,21 @@ fn price_aggregate(req, db, prices_mod, ok_json) {
   ok_json(prices_mod.aggregate_symbol_prices(rows, symbol))
 }
 
-fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position_cache, mutex_mod) {
+fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position_cache, mutex_mod, ctx) {
   let prefix = "/finance/position/"
   let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
-  let fills = fill_rows_for_account(db, account)
-  let cash = cash_rows_for_account(db, account)
+  let raw_fills = fill_rows_for_account(db, account)
+  let raw_cash = cash_rows_for_account(db, account)
   let now = current_ts(db)
   let prices = prices_mod.price_rows_at(db, now, max_price_age)
   let all_prices = prices_mod.all_price_rows(db)
   let inst_rows = instrument_rows(db)
   let ca_rows = corporate_action_rows(db)
+  let fills_vs = verify_rows(raw_fills, ctx)
+  let cash_vs = verify_rows(raw_cash, ctx)
+  let fills = filter_verified_rows(raw_fills, ctx)
+  let cash = filter_verified_rows(raw_cash, ctx)
+  let verification_summary = { fills: fills_vs, cash: cash_vs, all_valid: fills_vs.all_valid && cash_vs.all_valid }
   let fill_key = list.fold(fills, "", fn(acc, r) { str.concat([acc, r.digest]) })
   let cash_key = list.fold(cash, "", fn(acc, r) { str.concat([acc, r.digest]) })
   let price_key = list.fold(prices, "", fn(acc, r) { str.concat([acc, r.digest]) })
@@ -183,7 +188,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let nav_usd = state_mod.nav_usd_of(positions, cash, fx_rates)
   let risk_state_var = state_mod.risk_state_with_var(positions, state_mod.cash_balance_of(cash), all_prices)
   let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, now)
-  ok_json({ account: account, as_of_ts: now, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
+  ok_json({ account: account, as_of_ts: now, verification_summary: verification_summary, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
 
@@ -531,6 +536,26 @@ fn verify_payload_h(ctx, pk_hex, sig_b64, payload_json) {
     let sig_hex = ctx.bytes.to_hex(ctx.b64.decode(sig_b64)) in
     ctx.crypto.ed25519_verify(pk_hex, msg_hex, sig_hex)
 }
+
+fn verify_row(row, ctx) {
+  let pk = if rec.has(row, "issuer_pk_hex") then row.issuer_pk_hex else "" in
+  let sig = if rec.has(row, "sig_b64") then row.sig_b64 else "" in
+  let pj = if rec.has(row, "payload_json") then row.payload_json else "" in
+  if pk == "" || sig == "" || pj == "" then false
+  else verify_payload_h(ctx, pk, sig, pj)
+}
+
+fn verify_rows(rows, ctx) {
+  let results = list.map(rows, fn(r) { verify_row(r, ctx) }) in
+  let valid_count = list.len(list.filter(results, fn(v) { v })) in
+  let invalid_count = list.len(list.filter(results, fn(v) { !v })) in
+  { checked: list.len(rows), valid: valid_count, invalid: invalid_count, all_valid: invalid_count == 0 }
+}
+
+fn filter_verified_rows(rows, ctx) {
+  list.filter(rows, fn(r) { verify_row(r, ctx) })
+}
+
 
 fn health_h() {
   ok_json_h({ status: "ok" })
@@ -997,7 +1022,7 @@ fn handle(req, ctx) {
   else if str.starts_with(req.path, "/finance/state_payload/") then state_payload_at(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h, err_json_h)
   else if str.starts_with(req.path, "/finance/scenario_at/") then scenario_at(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.qasim_scenarios, ctx.max_price_age, ok_json_h, err_json_h)
   else if str.starts_with(req.path, "/finance/state_at/") then state_at(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h, err_json_h)
-  else if str.starts_with(req.path, "/finance/position/") then get_position(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h, ctx.position_cache, ctx.mutex)
+  else if str.starts_with(req.path, "/finance/position/") then get_position(req, ctx.db, ctx.qasim_prices, ctx.qasim_state, ctx.max_price_age, ok_json_h, ctx.position_cache, ctx.mutex, ctx)
   else { status: 404, headers: {}, body: "not found" }
 }
 
