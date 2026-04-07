@@ -243,9 +243,10 @@ fn compliance_check_h(req, ctx) {
     let fills = filter_verified_rows(raw_fills, ctx) in
     let cash = filter_verified_rows(raw_cash, ctx) in
     let vs = { fills: verify_rows(raw_fills, ctx), cash: verify_rows(raw_cash, ctx) } in
+    let all_prices = ctx.qasim_prices.all_price_rows(db) in
     let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
-    let risk_state = ctx.qasim_state.risk_state_of(positions, cash_balance) in
+    let risk_state = ctx.qasim_state.risk_state_with_var(positions, cash_balance, all_prices) in
     let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, now) in
     ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), verification_summary: vs, compliance: compliance })
 }

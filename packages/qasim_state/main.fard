@@ -658,6 +658,68 @@ fn check_rule(rule, positions, risk_state, as_of_ts) {
         str.concat(["blacklisted instruments held:", list.fold(breaching, "", fn(acc, p) { str.concat([acc, " ", p.instrument]) })]),
         str.concat(["exit positions in:", list.fold(breaching, "", fn(acc, p) { str.concat([acc, " ", p.instrument]) })]))
     else pass_result(rule_type)
+  else if rule_type == "max_delta_exposure" then
+    let max_exp = if rec.has(params, "max_value") then params.max_value else 0 in
+    let gross = if rec.has(risk_state, "gross_exposure") then risk_state.gross_exposure else 0.0 in
+    let g = if gross == null then 0.0 else gross in
+    if g > cast.float(max_exp) then
+      breach_result(rule_type, severity,
+        str.concat(["delta-adjusted gross exposure ", str.from(g), " exceeds max ", str.from(max_exp)]),
+        str.concat(["reduce delta-adjusted exposure by ", str.from(g - cast.float(max_exp))]))
+    else pass_result(rule_type)
+  else if rule_type == "max_vega" then
+    let max_vega = if rec.has(params, "max_value") then params.max_value else 0 in
+    let positions = if rec.has(risk_state, "positions") then risk_state.positions else [] in
+    let total_vega = list.fold(positions, 0.0, fn(acc, p) {
+      let greeks = if rec.has(p, "greeks") then p.greeks else null in
+      if greeks == null then acc
+      else
+        let v = if rec.has(greeks, "vega") then greeks.vega else null in
+        if v == null then acc
+        else if v < 0.0 then acc + (0.0 - v)
+        else acc + v
+    }) in
+    if total_vega > cast.float(max_vega) then
+      breach_result(rule_type, severity,
+        str.concat(["portfolio vega ", str.from(total_vega), " exceeds max ", str.from(max_vega)]),
+        "reduce options positions or hedge vega exposure")
+    else pass_result(rule_type)
+  else if rule_type == "max_portfolio_covar_var_95" then
+    let max_var = if rec.has(params, "max_value") then params.max_value else 0 in
+    let cvar = if rec.has(risk_state, "portfolio_covar_var_95") then risk_state.portfolio_covar_var_95 else 0.0 in
+    let v = if cvar == null then 0.0 else cvar in
+    if v > cast.float(max_var) then
+      breach_result(rule_type, severity,
+        str.concat(["portfolio covar VaR 95% ", str.from(v), " exceeds max ", str.from(max_var)]),
+        "reduce correlated positions or increase diversification")
+    else pass_result(rule_type)
+  else if rule_type == "max_portfolio_covar_var_99" then
+    let max_var = if rec.has(params, "max_value") then params.max_value else 0 in
+    let cvar = if rec.has(risk_state, "portfolio_covar_var_99") then risk_state.portfolio_covar_var_99 else 0.0 in
+    let v = if cvar == null then 0.0 else cvar in
+    if v > cast.float(max_var) then
+      breach_result(rule_type, severity,
+        str.concat(["portfolio covar VaR 99% ", str.from(v), " exceeds max ", str.from(max_var)]),
+        "reduce correlated positions or increase diversification")
+    else pass_result(rule_type)
+  else if rule_type == "max_es_95" then
+    let max_es = if rec.has(params, "max_value") then params.max_value else 0 in
+    let es = if rec.has(risk_state, "portfolio_es_95") then risk_state.portfolio_es_95 else 0.0 in
+    let v = if es == null then 0.0 else es in
+    if v > cast.float(max_es) then
+      breach_result(rule_type, severity,
+        str.concat(["portfolio ES 95% ", str.from(v), " exceeds max ", str.from(max_es)]),
+        "reduce tail risk exposure")
+    else pass_result(rule_type)
+  else if rule_type == "max_es_99" then
+    let max_es = if rec.has(params, "max_value") then params.max_value else 0 in
+    let es = if rec.has(risk_state, "portfolio_es_99") then risk_state.portfolio_es_99 else 0.0 in
+    let v = if es == null then 0.0 else es in
+    if v > cast.float(max_es) then
+      breach_result(rule_type, severity,
+        str.concat(["portfolio ES 99% ", str.from(v), " exceeds max ", str.from(max_es)]),
+        "reduce tail risk exposure")
+    else pass_result(rule_type)
   else
     pass_result(rule_type)
 }
