@@ -457,6 +457,21 @@ fn state_receipt_from_objects(account, fill_rows, cash_rows, price_rows, positio
   }
 }
 
+fn state_receipt_verified(account, fill_rows, cash_rows, price_rows, positions, as_of_ts, verification_summary) {
+  let payload = state_payload_from_objects(account, fill_rows, cash_rows, price_rows, positions, as_of_ts) in
+  let vs_digest = hash.sha256_text(json.encode(verification_summary)) in
+  let verified_payload = { state: payload, verification_digest: vs_digest, all_valid: verification_summary.all_valid } in
+  {
+    state_digest: hash.sha256_text(json.encode(verified_payload)),
+    verification_digest: vs_digest,
+    verified: verification_summary.all_valid,
+    fill_count: list.len(payload.fill_digests),
+    cash_count: list.len(payload.cash_digests),
+    price_count: list.len(payload.price_digests),
+    risk_state: payload.risk_state
+  }
+}
+
 fn fx_rates_from_prices(price_rows, prices_mod) {
   let fx_rows = list.filter(price_rows, fn(r) { str.ends_with(r.symbol, "/USD") })
   list.fold(fx_rows, {}, fn(acc, r) {
@@ -724,15 +739,37 @@ fn check_rule(rule, positions, risk_state, as_of_ts) {
     pass_result(rule_type)
 }
 
+fn severity_rank(s) {
+  if s == "hard" then 3
+  else if s == "warn" then 2
+  else if s == "info" then 1
+  else 0
+}
+
+fn dedup_by_rule_id(results) {
+  list.fold(results, [], fn(acc, r) {
+    let existing = list.find(acc, fn(x) { x.rule_id == r.rule_id }) in
+    if !rec.has(existing, "some") then list.append(acc, r)
+    else
+      let ex = existing.some in
+      let ex_rank = if ex.passed then 0 else severity_rank(ex.severity) in
+      let r_rank = if r.passed then 0 else severity_rank(r.severity) in
+      if r_rank > ex_rank then
+        list.map(acc, fn(x) { if x.rule_id == r.rule_id then r else x })
+      else acc
+  })
+}
+
 fn evaluate_compliance(rules, positions, risk_state, as_of_ts) {
-  let results = list.map(rules, fn(rule) {
+  let raw_results = list.map(rules, fn(rule) {
     let r = check_rule(rule, positions, risk_state, as_of_ts) in
     { rule_id: (if rec.has(rule, "rule_id") then rule.rule_id else ""), passed: r.passed, rule_type: r.rule_type, severity: r.severity, breach: r.breach, suggested_action: r.suggested_action }
-  })
-  let hard_breaches = list.filter(results, fn(r) { !r.passed && r.severity == "hard" })
-  let warnings = list.filter(results, fn(r) { !r.passed && r.severity == "warn" })
-  let info = list.filter(results, fn(r) { !r.passed && r.severity == "info" })
-  let all_breaches = list.filter(results, fn(r) { !r.passed })
+  }) in
+  let results = dedup_by_rule_id(raw_results) in
+  let hard_breaches = list.filter(results, fn(r) { !r.passed && r.severity == "hard" }) in
+  let warnings = list.filter(results, fn(r) { !r.passed && r.severity == "warn" }) in
+  let info = list.filter(results, fn(r) { !r.passed && r.severity == "info" }) in
+  let all_breaches = list.filter(results, fn(r) { !r.passed }) in
   { passed: list.len(hard_breaches) == 0, results: results, breach_count: list.len(all_breaches), hard_breach_count: list.len(hard_breaches), warning_count: list.len(warnings), breaches: all_breaches, hard_breaches: hard_breaches, warnings: warnings, info: info }
 }
 
@@ -876,5 +913,6 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   returns_from_prices: returns_from_prices,
   stddev_of: stddev_of,
   state_payload_from_objects: state_payload_from_objects,
-  state_receipt_from_objects: state_receipt_from_objects
+  state_receipt_from_objects: state_receipt_from_objects,
+  state_receipt_verified: state_receipt_verified
 }

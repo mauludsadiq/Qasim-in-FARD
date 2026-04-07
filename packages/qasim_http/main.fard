@@ -187,8 +187,8 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let fx_rates = state_mod.fx_rates_from_prices(prices, prices_mod)
   let nav_usd = state_mod.nav_usd_of(positions, cash, fx_rates)
   let risk_state_var = state_mod.risk_state_with_var(positions, state_mod.cash_balance_of(cash), all_prices)
-  let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, now)
-  ok_json({ account: account, as_of_ts: now, verification_summary: verification_summary, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
+  let receipt = state_mod.state_receipt_verified(account, fills, cash, prices, positions, now, verification_summary)
+  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
 
@@ -413,7 +413,7 @@ fn export_account(req, db, prices_mod, state_mod, max_price_age, ok_json) {
   let prices = prices_mod.price_rows_at(db, now, max_price_age)
   let inst_rows = instrument_rows(db)
   let positions = state_mod.positions_from_fills_with_meta(fills, prices, prices_mod, inst_rows)
-  let receipt = state_mod.state_receipt_from_objects(account, fills, cash, prices, positions, now)
+  let receipt = state_mod.state_receipt_verified(account, fills, cash, prices, positions, now, verification_summary)
   ok_json({ account: account, fills: fills, cash: cash, prices: prices, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), risk_state: receipt.risk_state, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
