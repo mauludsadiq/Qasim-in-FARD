@@ -240,9 +240,10 @@ Future-dated ts_unix values are rejected. URL-encoded path parameters are decode
 ## Price Consensus
 
 ### Staleness
-MAX_PRICE_AGE = 300 seconds. A price is valid at time t only if ts_unix <= t
-and (t - ts_unix) <= 300. Stale prices are excluded from valuation.
-Future-dated prices are rejected at ingest.
+MAX_PRICE_AGE = 86400 seconds (1 day). A price is valid at time t only if
+ts_unix <= t and (t - ts_unix) <= 86400. Stale prices are excluded from
+valuation. Future-dated prices are rejected at ingest. Historical VaR uses
+all_price_rows (no staleness filter) to preserve full return history.
 
 ### Aggregation output
   mean           unweighted average
@@ -261,6 +262,11 @@ Future-dated prices are rejected at ingest.
     fill_digests, cash_digests, price_digests,
     positions, nav, risk_state
   )
+
+Positions include: qty, price, value, asset_class, greeks (options only).
+Risk state includes: gross/net/long/short exposure, leverage, concentration,
+portfolio_var_95/99 (additive), portfolio_hvar_95/99 (historical exact),
+portfolio_covar_var_95/99 (correlation-aware covariance matrix VaR).
 
 Live /finance/position/ passes as_of_ts = server wall clock, making every
 snapshot uniquely time-anchored. Use /finance/state_at/ for reproducible
