@@ -233,18 +233,21 @@ fn compliance_check_h(req, ctx) {
   let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
   if account == "" then err_json_h(400, "missing account")
   else
-    let fills = fill_rows_for_account(db, account) in
-    let cash = cash_rows_for_account(db, account) in
+    let raw_fills = fill_rows_for_account(db, account) in
+    let raw_cash = cash_rows_for_account(db, account) in
     let now = current_ts(db) in
     let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
     let inst_rows = instrument_rows(db) in
     let ca_rows = corporate_action_rows(db) in
     let rules = compliance_rule_rows(db, account) in
+    let fills = filter_verified_rows(raw_fills, ctx) in
+    let cash = filter_verified_rows(raw_cash, ctx) in
+    let vs = { fills: verify_rows(raw_fills, ctx), cash: verify_rows(raw_cash, ctx) } in
     let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
     let risk_state = ctx.qasim_state.risk_state_of(positions, cash_balance) in
     let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, now) in
-    ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), compliance: compliance })
+    ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), verification_summary: vs, compliance: compliance })
 }
 
 fn compliance_at_h(req, ctx) {
@@ -277,12 +280,15 @@ fn attribution_h(req, ctx) {
   let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
   if account == "" then err_json_h(400, "missing account")
   else
-    let fills = fill_rows_for_account(db, account) in
-    let cash = cash_rows_for_account(db, account) in
+    let raw_fills = fill_rows_for_account(db, account) in
+    let raw_cash = cash_rows_for_account(db, account) in
     let now = current_ts(db) in
     let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
     let inst_rows = instrument_rows(db) in
     let ca_rows = corporate_action_rows(db) in
+    let fills = filter_verified_rows(raw_fills, ctx) in
+    let cash = filter_verified_rows(raw_cash, ctx) in
+    let vs = { fills: verify_rows(raw_fills, ctx), cash: verify_rows(raw_cash, ctx) } in
     let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
     let nav = ctx.qasim_state.nav_of(positions, cash_balance) in
@@ -294,6 +300,7 @@ fn attribution_h(req, ctx) {
     ok_json_h({
       account: account,
       as_of_ts: now,
+      verification_summary: vs,
       current_nav: nav,
       cash_balance: cash_balance,
       beginning_nav: beginning_nav,
@@ -315,8 +322,11 @@ fn pretrade_h(req, ctx) {
   else if qty == 0 then err_json_h(400, "missing qty")
   else
     let now = current_ts(db) in
-    let fills = fill_rows_for_account(db, account) in
-    let cash = cash_rows_for_account(db, account) in
+    let raw_fills = fill_rows_for_account(db, account) in
+    let raw_cash = cash_rows_for_account(db, account) in
+    let fills = filter_verified_rows(raw_fills, ctx) in
+    let cash = filter_verified_rows(raw_cash, ctx) in
+    let vs = { fills: verify_rows(raw_fills, ctx), cash: verify_rows(raw_cash, ctx) } in
     let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
     let all_prices = ctx.qasim_prices.all_price_rows(db) in
     let inst_rows = instrument_rows(db) in
@@ -367,6 +377,7 @@ fn pretrade_h(req, ctx) {
         leverage: if current_risk.leverage == null then null else hypo_risk.leverage - current_risk.leverage,
         concentration: if current_risk.concentration == null then null else hypo_risk.concentration - current_risk.concentration
       },
+      verification_summary: vs,
       current_compliance: current_compliance,
       hypo_compliance: hypo_compliance,
       compliance_delta: compliance_delta
