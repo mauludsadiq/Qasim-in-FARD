@@ -226,7 +226,7 @@ Future-dated ts_unix values are rejected. URL-encoded path parameters are decode
   /finance/state_at/<account>/<ts_unix>            Time-indexed state
   /finance/export_at/<account>/<ts_unix>           Time-indexed export
   /finance/state_payload/<account>/<ts_unix>       Raw state digest payload
-  /finance/scenario_at/<account>/<ts_unix>/<s>     Scenario evaluation
+  /finance/scenario_at/<account>/<ts_unix>/<scenario>     Scenario evaluation
   /finance/position/<account>                      Live position, NAV, VaR, Greeks, verification
   /finance/attribution/<account>                   Performance attribution (P&L, cost basis, return)
   /finance/compliance/<account>                    Compliance check against all active rules
