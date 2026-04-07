@@ -575,14 +575,19 @@ fn post_instrument_h(req, ctx) {
   else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
   else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
   else
+    let pp = json.decode(payload_json) in
     let obj = ctx.qasim_objects.instrument(
-      (if rec.has(body, "instrument_id") then rec.get(body, "instrument_id") else ""),
-      (if rec.has(body, "asset_class") then rec.get(body, "asset_class") else "equity"),
-      (if rec.has(body, "symbol") then rec.get(body, "symbol") else ""),
-      (if rec.has(body, "currency") then rec.get(body, "currency") else "USD"),
-      (if rec.has(body, "venue") then rec.get(body, "venue") else ""),
-      (if rec.has(body, "multiplier") then rec.get(body, "multiplier") else 1),
-      (if rec.has(body, "expiry_ts_unix") then rec.get(body, "expiry_ts_unix") else 0),
+      (if rec.has(pp, "instrument_id") then pp.instrument_id else ""),
+      (if rec.has(pp, "asset_class") then pp.asset_class else "equity"),
+      (if rec.has(pp, "symbol") then pp.symbol else ""),
+      (if rec.has(pp, "currency") then pp.currency else "USD"),
+      (if rec.has(pp, "venue") then pp.venue else ""),
+      (if rec.has(pp, "multiplier") then pp.multiplier else 1),
+      (if rec.has(pp, "expiry_ts_unix") then pp.expiry_ts_unix else 0),
+      (if rec.has(pp, "strike") then pp.strike else null),
+      (if rec.has(pp, "implied_vol") then pp.implied_vol else null),
+      (if rec.has(pp, "option_type") then pp.option_type else "call"),
+      (if rec.has(pp, "risk_free_rate") then pp.risk_free_rate else 0.05),
       issuer_pk_hex, sig_b64
     ) in
     let instrument_id = obj.payload.instrument_id in
@@ -648,13 +653,16 @@ fn post_cash_h(req, ctx) {
   else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
   else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
-  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < (if rec.has(body, "ts_unix") then rec.get(body, "ts_unix") else 0) then err_json_h(400, "ts_unix is in the future")
   else
+    let pp = json.decode(payload_json) in
+    let ts_unix = if rec.has(pp, "ts_unix") then pp.ts_unix else 0 in
+    if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < ts_unix then err_json_h(400, "ts_unix is in the future")
+    else
     let obj = ctx.qasim_objects.cash(
-      (if rec.has(body, "account") then rec.get(body, "account") else ""),
-      (if rec.has(body, "currency") then rec.get(body, "currency") else ""),
-      (if rec.has(body, "amount") then rec.get(body, "amount") else 0),
-      (if rec.has(body, "ts_unix") then rec.get(body, "ts_unix") else 0),
+      (if rec.has(pp, "account") then pp.account else ""),
+      (if rec.has(pp, "currency") then pp.currency else ""),
+      (if rec.has(pp, "amount") then pp.amount else 0),
+      ts_unix,
       issuer_pk_hex, sig_b64
     ) in
     let _ = sqlite.exec(db, str.concat([
@@ -721,17 +729,20 @@ fn post_fill_h(req, ctx) {
   else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
   else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
-  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < (if rec.has(body, "ts_unix") then rec.get(body, "ts_unix") else 0) then err_json_h(400, "ts_unix is in the future")
   else
+    let pp = json.decode(payload_json) in
+    let ts_unix = if rec.has(pp, "ts_unix") then pp.ts_unix else 0 in
+    if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < ts_unix then err_json_h(400, "ts_unix is in the future")
+    else
     let obj = ctx.qasim_objects.fill(
-      (if rec.has(body, "fill_id") then rec.get(body, "fill_id") else ""),
-      (if rec.has(body, "order_id") then rec.get(body, "order_id") else ""),
-      (if rec.has(body, "account") then rec.get(body, "account") else ""),
-      (if rec.has(body, "instrument") then rec.get(body, "instrument") else ""),
-      (if rec.has(body, "side") then rec.get(body, "side") else ""),
-      (if rec.has(body, "qty") then rec.get(body, "qty") else 0),
-      (if rec.has(body, "price") then rec.get(body, "price") else 0),
-      (if rec.has(body, "ts_unix") then rec.get(body, "ts_unix") else 0),
+      (if rec.has(pp, "fill_id") then pp.fill_id else ""),
+      (if rec.has(pp, "order_id") then pp.order_id else ""),
+      (if rec.has(pp, "account") then pp.account else ""),
+      (if rec.has(pp, "instrument") then pp.instrument else ""),
+      (if rec.has(pp, "side") then pp.side else ""),
+      (if rec.has(pp, "qty") then pp.qty else 0),
+      (if rec.has(pp, "price") then pp.price else 0),
+      ts_unix,
       issuer_pk_hex, sig_b64
     ) in
     let _ = sqlite.exec(db, str.concat([
