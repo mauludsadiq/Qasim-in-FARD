@@ -185,6 +185,66 @@ fn position_greeks(p, meta, spot_price, as_of_ts) {
 }
 
 
+fn mean_of(values) {
+  let n = list.len(values) in
+  if n == 0 then 0.0
+  else
+    let sum = list.fold(values, 0.0, fn(acc, x) { acc + x }) in
+    sum / cast.float(n)
+}
+
+fn covariance_of(xs, ys) {
+  let n = list.len(xs) in
+  let m = list.len(ys) in
+  if n < 2 || m < 2 || n != m then null
+  else
+    let mx = mean_of(xs) in
+    let my = mean_of(ys) in
+    let pairs = list.fold(xs, { i: 0, sum: 0.0 }, fn(acc, x) {
+      let y = ys[acc.i] in
+      { i: acc.i + 1, sum: acc.sum + (x - mx) * (y - my) }
+    }) in
+    pairs.sum / cast.float(n - 1)
+}
+
+fn align_returns(xs, ys, max_n) {
+  let nx = list.len(xs) in
+  let ny = list.len(ys) in
+  let n = if nx < ny then nx else ny in
+  let n2 = if n > max_n then max_n else n in
+  let xs2 = list.drop(xs, nx - n2) in
+  let ys2 = list.drop(ys, ny - n2) in
+  { xs: xs2, ys: ys2, n: n2 }
+}
+
+fn portfolio_covar_var(positions, price_rows, prices_mod, z_score) {
+  let n = list.len(positions) in
+  if n == 0 then 0.0
+  else
+    let pos_returns = list.map(positions, fn(p) {
+      let sym = price_symbol_for(p.instrument, null) in
+      let rets = returns_from_prices(price_rows, sym) in
+      let rets252 = if list.len(rets) > 252 then list.drop(rets, list.len(rets) - 252) else rets in
+      { instrument: p.instrument, value: p.value, returns: rets252 }
+    }) in
+    let variance = list.fold(pos_returns, 0.0, fn(row_acc, pi) {
+      if pi.value == null then row_acc
+      else
+        list.fold(pos_returns, row_acc, fn(col_acc, pj) {
+          if pj.value == null then col_acc
+          else
+            let wi = cast.float(pi.value) in
+            let wj = cast.float(pj.value) in
+            let aligned = align_returns(pi.returns, pj.returns, 252) in
+            let cov = if aligned.n < 2 then null else covariance_of(aligned.xs, aligned.ys) in
+            if cov == null then col_acc
+            else col_acc + wi * wj * cov
+        })
+    }) in
+    let vol = if variance <= 0.0 then 0.0 else math.sqrt(variance) in
+    vol * z_score
+}
+
 fn returns_from_prices(price_rows, symbol) {
   let rows = list.filter(price_rows, fn(r) { r.symbol == symbol })
   let sorted = list.sort_by(rows, fn(a, b) { a.ts_unix - b.ts_unix })
@@ -306,6 +366,8 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
   let portfolio_var_99 = list.fold(position_risk, 0, fn(acc, p) { if p.var_99 == null then acc else acc + p.var_99 })
   let portfolio_hvar_95 = list.fold(position_risk, 0, fn(acc, p) { if p.hvar_95 == null then acc else acc + p.hvar_95 })
   let portfolio_hvar_99 = list.fold(position_risk, 0, fn(acc, p) { if p.hvar_99 == null then acc else acc + p.hvar_99 })
+  let covar_var_95 = portfolio_covar_var(positions, price_rows, null, 1.645)
+  let covar_var_99 = portfolio_covar_var(positions, price_rows, null, 2.326)
   {
     nav: nav,
     cash_balance: cash_balance,
@@ -319,6 +381,8 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
     portfolio_var_99: portfolio_var_99,
     portfolio_hvar_95: portfolio_hvar_95,
     portfolio_hvar_99: portfolio_hvar_99,
+    portfolio_covar_var_95: covar_var_95,
+    portfolio_covar_var_99: covar_var_99,
     positions: position_risk
   }
 }
@@ -702,6 +766,9 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   ncdf: ncdf,
   black_scholes_greeks: black_scholes_greeks,
   position_greeks: position_greeks,
+  mean_of: mean_of,
+  covariance_of: covariance_of,
+  portfolio_covar_var: portfolio_covar_var,
   returns_from_prices: returns_from_prices,
   stddev_of: stddev_of,
   state_payload_from_objects: state_payload_from_objects,
