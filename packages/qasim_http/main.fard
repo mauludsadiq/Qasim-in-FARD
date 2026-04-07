@@ -242,6 +242,30 @@ fn compliance_check_h(req, ctx) {
     ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), compliance: compliance })
 }
 
+fn compliance_at_h(req, ctx) {
+  let db = ctx.db in
+  let prefix = "/finance/compliance_at/" in
+  let rest = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
+  let parts = str.split(rest, "/") in
+  let account = if list.len(parts) > 0 then parts[0] else "" in
+  let ts_unix_cutoff = if list.len(parts) > 1 then parts[1] else "" in
+  if account == "" then err_json_h(400, "missing account")
+  else if ts_unix_cutoff == "" then err_json_h(400, "missing ts_unix")
+  else
+    let cutoff = json.decode(ts_unix_cutoff) in
+    let fills = fill_rows_for_account_at(db, account, cutoff) in
+    let cash = cash_rows_for_account_at(db, account, cutoff) in
+    let prices = ctx.qasim_prices.price_rows_at(db, cutoff, ctx.max_price_age) in
+    let inst_rows = instrument_rows(db) in
+    let ca_rows = corporate_action_rows(db) in
+    let rules = compliance_rule_rows(db, account) in
+    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, cutoff) in
+    let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
+    let risk_state = ctx.qasim_state.risk_state_of(positions, cash_balance) in
+    let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, cutoff) in
+    ok_json_h({ account: account, as_of_ts: cutoff, rule_count: list.len(rules), compliance: compliance })
+}
+
 fn attribution_h(req, ctx) {
   let db = ctx.db in
   let prefix = "/finance/attribution/" in
@@ -950,6 +974,7 @@ fn handle(req, ctx) {
   else if req.path == "/finance/ingest/fill" then (if req.body == "" then err_json_h(400, "request body required") else post_fill_h(req, ctx))
   else if req.path == "/finance/price/claim" then (if req.body == "" then err_json_h(400, "request body required") else post_price_h(req, ctx))
   else if req.path == "/finance/live/price" then (if req.body == "" then err_json_h(400, "request body required") else post_live_price_h(req, ctx))
+  else if str.starts_with(req.path, "/finance/compliance_at/") then compliance_at_h(req, ctx)
   else if str.starts_with(req.path, "/finance/compliance/") then compliance_check_h(req, ctx)
   else if str.starts_with(req.path, "/finance/attribution/") then attribution_h(req, ctx)
   else if req.path == "/finance/pretrade" then (if req.body == "" then err_json_h(400, "request body required") else pretrade_h(req, ctx))
