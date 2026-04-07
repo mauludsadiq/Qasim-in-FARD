@@ -211,6 +211,7 @@ Requires n >= 10 returns. Uses full price history, not staleness-filtered prices
   /finance/ingest/fill              Record an execution fill
   /finance/price/claim              Submit a signed price
   /finance/live/price               Fetch and sign a live price feed
+  /finance/ingest/compliance_rule   Register a signed compliance rule
   /finance/ingest/batch             Ingest array of signed objects (single chain link)
   /finance/replay                   Replay state from supplied data
 
@@ -220,13 +221,17 @@ Future-dated ts_unix values are rejected. URL-encoded path parameters are decode
 
 ### Query (GET)
 
-  /finance/position/<account>                      Live position, NAV, VaR
   /finance/export/<account>                        Full replay package
   /finance/price/aggregate/<symbol>                Multi-source price consensus
   /finance/state_at/<account>/<ts_unix>            Time-indexed state
   /finance/export_at/<account>/<ts_unix>           Time-indexed export
   /finance/state_payload/<account>/<ts_unix>       Raw state digest payload
   /finance/scenario_at/<account>/<ts_unix>/<s>     Scenario evaluation
+  /finance/position/<account>                      Live position, NAV, VaR, Greeks, verification
+  /finance/attribution/<account>                   Performance attribution (P&L, cost basis, return)
+  /finance/compliance/<account>                    Compliance check against all active rules
+  /finance/compliance_at/<account>/<ts_unix>       Time-indexed compliance check
+  /finance/pretrade                                Pre-trade what-if + compliance delta
   /finance/chain/verify                            Chain integrity check
   /health                                          Server health
 
@@ -380,12 +385,12 @@ Corporate actions are stored in object_store with object_type='corporate_action'
 
 ## Future Extensions
 
-- Dividend cash injection from corporate actions
-- Historical VaR (exact, from sorted P&L distribution)
+- Correlation-aware portfolio VaR (covariance matrix)
+- Monte Carlo VaR (fixed-seed deterministic)
 - Matching and clearing engine
 - Private markets (DCF models, cash-flow schedules)
-- Batch ingest endpoint
 - Integrations (Bloomberg, custodians, exchanges)
+- XBRL / regulatory export formats
 
 ---
 
@@ -448,6 +453,78 @@ Returns current state, hypothetical state (with synthetic fill applied), and del
 
 Full risk suite (parametric VaR, historical VaR) computed on both states.
 Useful for compliance checks, position limits, and risk budgeting before execution.
+
+---
+
+## Compliance Rules Engine
+
+POST /finance/ingest/compliance_rule stores a signed rule with severity and timestamps:
+
+  {
+    "rule_id": "R1", "account": "ACCT-123",
+    "rule_type": "max_position_size",
+    "params": {"instrument": "AAPL", "max_value": 10000},
+    "severity": "hard",
+    "effective_ts": 0, "expiry_ts": 0
+  }
+
+Supported rule types: max_position_size, max_concentration, max_leverage,
+max_gross_exposure, max_portfolio_var_95, max_portfolio_var_99, min_cash_pct,
+max_position_qty, max_asset_class_exposure, instrument_blacklist.
+
+Each breach includes a suggested_action (e.g. "reduce AAPL by 1152").
+Rules with account="*" apply globally across all accounts.
+evaluate_compliance returns hard_breaches, warnings, and info separately.
+passed=true only when zero hard breaches.
+
+GET /finance/compliance/<account> and GET /finance/compliance_at/<account>/<ts>
+return the full compliance state with verification_summary.
+
+POST /finance/pretrade returns compliance_delta: new_breaches and resolved_breaches
+after the proposed trade. trade_blocked=true only for new hard breaches.
+
+---
+
+## Option Greeks (Black-Scholes)
+
+Register an option instrument with strike, implied_vol, option_type, risk_free_rate:
+
+  POST /finance/ingest/instrument
+  { "instrument_id": "AAPL-CALL-260", "asset_class": "option",
+    "symbol": "AAPL", "strike": 260, "implied_vol": 0.25,
+    "option_type": "call", "risk_free_rate": 0.05,
+    "expiry_ts_unix": 1778000000, "multiplier": 100 }
+
+Positions with asset_class="option" include a greeks field:
+
+  greeks: {
+    delta: 99.18,   -- position delta (qty x multiplier x unit_delta)
+    gamma: 0.00495,
+    vega:  40.53,   -- per 1% vol move
+    theta: -0.173,  -- per calendar day
+    rho:   611.6,   -- per 1% rate move
+    unit_greeks: { delta: 0.9918, gamma: 0.0000495, ... }
+  }
+
+Normal CDF via Abramowitz-Stegun 5-term Horner approximation.
+time_to_expiry computed from expiry_ts_unix - as_of_ts in years.
+
+---
+
+## Signature Verification on Read
+
+All major query endpoints verify Ed25519 signatures on every object fetched
+from the database before using it in computation. Tampered or missing-sig
+objects are excluded silently. Each response includes:
+
+  verification_summary: {
+    fills: { checked: 3, valid: 3, invalid: 0, all_valid: true },
+    cash:  { checked: 1, valid: 1, invalid: 0, all_valid: true },
+    all_valid: true
+  }
+
+Endpoints with verification: /position, /compliance, /compliance_at,
+/attribution, /pretrade.
 
 ---
 
