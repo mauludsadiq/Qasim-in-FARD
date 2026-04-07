@@ -53,6 +53,6 @@ test "asset_class in position output" { aapl.asset_class == "equity" }
 test "cash balance" { cash_bal == 5000 }
 test "nav equals cash plus position value" { nav == 5600 }
 test "positions_from_fills backward compat" { list.len(positions_no_meta) == 1 }
-test "risk gross exposure" { risk.gross_exposure == 600 }
-test "risk net exposure" { risk.net_exposure == 600 }
+test "risk gross exposure" { risk.gross_exposure == 600.0 }
+test "risk net exposure" { risk.net_exposure == 600.0 }
 test "risk concentration" { risk.concentration == 1 }

@@ -66,32 +66,51 @@ fn nav_of(positions, cash_balance) {
   })
 }
 
+fn effective_exposure_of(p) {
+  let asset_class = if rec.has(p, "asset_class") then p.asset_class else "equity" in
+  if asset_class == "option" then
+    let greeks = if rec.has(p, "greeks") then p.greeks else null in
+    if greeks == null then p.value
+    else
+      let delta = if rec.has(greeks, "delta") then greeks.delta else null in
+      if delta == null then p.value
+      else
+        let price = if rec.has(p, "price") then p.price else null in
+        if price == null then p.value
+        else cast.float(price) * delta
+  else p.value
+}
+
 fn gross_exposure_of(positions) {
-  list.fold(positions, 0, fn(acc, p) {
-    if p.value == null then acc
-    else if p.value < 0 then acc + (0 - p.value)
-    else acc + p.value
+  list.fold(positions, 0.0, fn(acc, p) {
+    let v = effective_exposure_of(p) in
+    if v == null then acc
+    else if v < 0.0 then acc + (0.0 - v)
+    else acc + v
   })
 }
 
 fn net_exposure_of(positions) {
-  list.fold(positions, 0, fn(acc, p) {
-    if p.value == null then acc else acc + p.value
+  list.fold(positions, 0.0, fn(acc, p) {
+    let v = effective_exposure_of(p) in
+    if v == null then acc else acc + v
   })
 }
 
 fn long_exposure_of(positions) {
-  list.fold(positions, 0, fn(acc, p) {
-    if p.value == null then acc
-    else if p.value > 0 then acc + p.value
+  list.fold(positions, 0.0, fn(acc, p) {
+    let v = effective_exposure_of(p) in
+    if v == null then acc
+    else if v > 0.0 then acc + v
     else acc
   })
 }
 
 fn short_exposure_of(positions) {
-  list.fold(positions, 0, fn(acc, p) {
-    if p.value == null then acc
-    else if p.value < 0 then acc + (0 - p.value)
+  list.fold(positions, 0.0, fn(acc, p) {
+    let v = effective_exposure_of(p) in
+    if v == null then acc
+    else if v < 0.0 then acc + (0.0 - v)
     else acc
   })
 }
@@ -99,7 +118,7 @@ fn short_exposure_of(positions) {
 fn weight_of(value, gross) {
   if value == null then null
   else if gross == 0 then 0
-  else value / gross
+  else cast.float(value) / gross
 }
 
 fn max_abs_weight_of(items) {
@@ -375,7 +394,7 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
     net_exposure: net,
     long_exposure: long_exposure,
     short_exposure: short_exposure,
-    leverage: if nav == 0 then null else gross / nav,
+    leverage: if nav == 0 then null else gross / cast.float(nav),
     concentration: concentration,
     portfolio_var_95: portfolio_var_95,
     portfolio_var_99: portfolio_var_99,
@@ -766,6 +785,7 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   ncdf: ncdf,
   black_scholes_greeks: black_scholes_greeks,
   position_greeks: position_greeks,
+  effective_exposure_of: effective_exposure_of,
   mean_of: mean_of,
   covariance_of: covariance_of,
   portfolio_covar_var: portfolio_covar_var,
