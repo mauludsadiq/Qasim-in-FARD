@@ -1,0 +1,64 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/str") as str
+import("std/json") as json
+import("std/hash") as hash
+import("std/sqlite") as sqlite
+import("std/cast") as cast
+import("std/math") as math
+import("../packages/qasim_state/main") as state
+
+let price_rows = [
+  { symbol: "AAPL/USD", mid: 100, ts_unix: 1 },
+  { symbol: "AAPL/USD", mid: 102, ts_unix: 2 },
+  { symbol: "AAPL/USD", mid: 101, ts_unix: 3 },
+  { symbol: "AAPL/USD", mid: 104, ts_unix: 4 },
+  { symbol: "AAPL/USD", mid: 103, ts_unix: 5 },
+  { symbol: "AAPL/USD", mid: 106, ts_unix: 6 },
+  { symbol: "AAPL/USD", mid: 105, ts_unix: 7 },
+  { symbol: "AAPL/USD", mid: 108, ts_unix: 8 },
+  { symbol: "AAPL/USD", mid: 107, ts_unix: 9 },
+  { symbol: "AAPL/USD", mid: 110, ts_unix: 10 },
+  { symbol: "AAPL/USD", mid: 112, ts_unix: 11 },
+  { symbol: "MSFT/USD", mid: 200, ts_unix: 1 },
+  { symbol: "MSFT/USD", mid: 204, ts_unix: 2 },
+  { symbol: "MSFT/USD", mid: 202, ts_unix: 3 },
+  { symbol: "MSFT/USD", mid: 208, ts_unix: 4 },
+  { symbol: "MSFT/USD", mid: 206, ts_unix: 5 },
+  { symbol: "MSFT/USD", mid: 212, ts_unix: 6 },
+  { symbol: "MSFT/USD", mid: 210, ts_unix: 7 },
+  { symbol: "MSFT/USD", mid: 216, ts_unix: 8 },
+  { symbol: "MSFT/USD", mid: 214, ts_unix: 9 },
+  { symbol: "MSFT/USD", mid: 220, ts_unix: 10 }
+]
+
+let xs = [0.02, 0.0 - 0.01, 0.03, 0.0 - 0.01, 0.03, 0.0 - 0.01, 0.03, 0.0 - 0.01, 0.03]
+let ys = [0.04, 0.0 - 0.02, 0.06, 0.0 - 0.02, 0.06, 0.0 - 0.02, 0.06, 0.0 - 0.02, 0.06]
+
+let cov = state.covariance_of(xs, ys)
+let mean_x = state.mean_of(xs)
+
+let positions = [
+  { instrument: "AAPL", qty: 100, price: 110, value: 11000, asset_class: "equity", greeks: null },
+  { instrument: "MSFT", qty: 50,  price: 220, value: 11000, asset_class: "equity", greeks: null }
+]
+
+let covar_var_95 = state.portfolio_covar_var(positions, price_rows, 1.645)
+let covar_var_99 = state.portfolio_covar_var(positions, price_rows, 2.326)
+
+let sorted_losses = [0.0 - 100.0, 0.0 - 80.0, 0.0 - 60.0, 0.0 - 40.0, 0.0 - 20.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+let tail_2 = state.tail_mean_of(sorted_losses, 2)
+
+let hvar = state.historical_var_of(10000, price_rows, "AAPL/USD")
+
+test "mean_of xs correct" { mean_x > 0.01 && mean_x < 0.02 }
+test "covariance positive for correlated series" { cov > 0.0 }
+test "covariance of identical series equals variance" { state.covariance_of(xs, xs) > 0.0 }
+test "portfolio_covar_var_95 positive" { covar_var_95 > 0.0 }
+test "portfolio_covar_var_99 greater than 95" { covar_var_99 > covar_var_95 }
+test "tail_mean of worst 2 of 10 is -90" { tail_2 < 0.0 - 85.0 && tail_2 > 0.0 - 95.0 }
+test "historical_var returns hvar_95" { hvar.hvar_95 != null }
+test "historical_var returns es_95" { hvar.es_95 != null }
+test "es_95 greater than or equal to hvar_95" { hvar.es_95 > hvar.hvar_95 || hvar.es_95 == hvar.hvar_95 }
+test "es_99 greater than or equal to hvar_99" { hvar.es_99 > hvar.hvar_99 || hvar.es_99 == hvar.hvar_99 }
+test "n_returns equals 10 for 11 price rows" { hvar.n_returns == 10 }

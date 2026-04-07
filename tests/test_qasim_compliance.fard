@@ -1,0 +1,83 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/str") as str
+import("std/json") as json
+import("std/hash") as hash
+import("std/sqlite") as sqlite
+import("std/cast") as cast
+import("std/math") as math
+import("../packages/qasim_state/main") as state
+
+let positions = [
+  { instrument: "AAPL", qty: 100, price: 150, value: 15000, asset_class: "equity", greeks: null },
+  { instrument: "MSFT", qty: 50,  price: 300, value: 15000, asset_class: "equity", greeks: null }
+]
+
+let risk_state = {
+  nav: 35000,
+  cash_balance: 5000,
+  gross_exposure: 30000.0,
+  net_exposure: 30000.0,
+  leverage: 0.857,
+  concentration: 0.5,
+  portfolio_var_95: 500.0,
+  portfolio_var_99: 700.0,
+  portfolio_hvar_95: 400.0,
+  portfolio_hvar_99: 600.0,
+  portfolio_es_95: 550.0,
+  portfolio_es_99: 750.0,
+  portfolio_covar_var_95: 450.0,
+  portfolio_covar_var_99: 640.0,
+  positions: positions
+}
+
+let now = 1000000
+
+let rule_pos_size = { rule_id: "R1", rule_type: "max_position_size", params: { instrument: "AAPL", max_value: 20000 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_pos_size_breach = { rule_id: "R2", rule_type: "max_position_size", params: { instrument: "AAPL", max_value: 10000 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_conc = { rule_id: "R3", rule_type: "max_concentration", params: { max_pct: 60 }, severity: "warn", effective_ts: 0, expiry_ts: 0 }
+let rule_conc_breach = { rule_id: "R4", rule_type: "max_concentration", params: { max_pct: 40 }, severity: "warn", effective_ts: 0, expiry_ts: 0 }
+let rule_lev = { rule_id: "R5", rule_type: "max_leverage", params: { max_leverage: 1 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_cash = { rule_id: "R6", rule_type: "min_cash_pct", params: { min_pct: 10 }, severity: "warn", effective_ts: 0, expiry_ts: 0 }
+let rule_cash_breach = { rule_id: "R7", rule_type: "min_cash_pct", params: { min_pct: 20 }, severity: "warn", effective_ts: 0, expiry_ts: 0 }
+let rule_blacklist = { rule_id: "R8", rule_type: "instrument_blacklist", params: { instruments: ["TSLA", "GME"] }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_blacklist_breach = { rule_id: "R9", rule_type: "instrument_blacklist", params: { instruments: ["AAPL", "GME"] }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_expired = { rule_id: "R10", rule_type: "max_position_size", params: { instrument: "AAPL", max_value: 100 }, severity: "hard", effective_ts: 0, expiry_ts: 999999 }
+let rule_covar = { rule_id: "R11", rule_type: "max_portfolio_covar_var_95", params: { max_value: 1000 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_covar_breach = { rule_id: "R12", rule_type: "max_portfolio_covar_var_95", params: { max_value: 100 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_es = { rule_id: "R13", rule_type: "max_es_95", params: { max_value: 1000 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_es_breach = { rule_id: "R14", rule_type: "max_es_95", params: { max_value: 100 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+
+let c1 = state.evaluate_compliance([rule_pos_size], positions, risk_state, now)
+let c2 = state.evaluate_compliance([rule_pos_size_breach], positions, risk_state, now)
+let c3 = state.evaluate_compliance([rule_conc], positions, risk_state, now)
+let c4 = state.evaluate_compliance([rule_conc_breach], positions, risk_state, now)
+let c5 = state.evaluate_compliance([rule_lev], positions, risk_state, now)
+let c6 = state.evaluate_compliance([rule_cash], positions, risk_state, now)
+let c7 = state.evaluate_compliance([rule_cash_breach], positions, risk_state, now)
+let c8 = state.evaluate_compliance([rule_blacklist], positions, risk_state, now)
+let c9 = state.evaluate_compliance([rule_blacklist_breach], positions, risk_state, now)
+let c10 = state.evaluate_compliance([rule_expired], positions, risk_state, now)
+let c11 = state.evaluate_compliance([rule_covar], positions, risk_state, now)
+let c12 = state.evaluate_compliance([rule_covar_breach], positions, risk_state, now)
+let c13 = state.evaluate_compliance([rule_es], positions, risk_state, now)
+let c14 = state.evaluate_compliance([rule_es_breach], positions, risk_state, now)
+let c_dedup = state.evaluate_compliance([rule_pos_size_breach, rule_pos_size_breach], positions, risk_state, now)
+
+test "max_position_size passes when under limit" { c1.passed }
+test "max_position_size breaches when over limit" { !c2.passed }
+test "max_concentration passes at 50% with 60% limit" { c3.passed }
+test "max_concentration breaches at 50% with 40% limit" { c4.warning_count == 1 && c4.breach_count == 1 }
+test "max_leverage passes at 0.857 with limit 1" { c5.passed }
+test "min_cash_pct passes at 14% with 10% limit" { c6.passed }
+test "min_cash_pct breaches at 14% with 20% limit" { c7.warning_count == 1 }
+test "instrument_blacklist passes when no position in list" { c8.passed }
+test "instrument_blacklist breaches when AAPL held and blacklisted" { !c9.passed }
+test "expired rule does not breach" { c10.passed }
+test "max_portfolio_covar_var_95 passes when under limit" { c11.passed }
+test "max_portfolio_covar_var_95 breaches when over limit" { !c12.passed }
+test "max_es_95 passes when under limit" { c13.passed }
+test "max_es_95 breaches when over limit" { !c14.passed }
+test "duplicate rule_ids deduplicated" { list.len(c_dedup.results) == 1 }
+test "hard breach count correct" { c2.hard_breach_count == 1 }
+test "warning count correct" { c4.warning_count == 1 }

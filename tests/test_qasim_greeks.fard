@@ -1,0 +1,72 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/str") as str
+import("std/json") as json
+import("std/hash") as hash
+import("std/sqlite") as sqlite
+import("std/cast") as cast
+import("std/math") as math
+
+fn ncdf(x) {
+  let pi = 3.141592653589793 in
+  let neg = x < 0.0 in
+  let ax = if neg then 0.0 - x else x in
+  let t = 1.0 / (1.0 + 0.2316419 * ax) in
+  let nd = math.exp(0.0 - (ax * ax) / 2.0) / math.sqrt(2.0 * pi) in
+  let poly = t * (0.319381530 + t * (0.0 - 0.356563782 + t * (1.781477937 + t * (0.0 - 1.821255978 + t * 1.330274429)))) in
+  let result = 1.0 - nd * poly in
+  if neg then 1.0 - result else result
+}
+
+fn black_scholes_greeks(spot, strike, vol, rfr, tte, ot) {
+  if spot == null || strike == null || vol == null || tte == null then
+    { delta: null, gamma: null, vega: null, theta: null, rho: null, d1: null, d2: null }
+  else if tte <= 0.0 || vol <= 0.0 || spot <= 0.0 || strike <= 0.0 then
+    { delta: null, gamma: null, vega: null, theta: null, rho: null, d1: null, d2: null }
+  else
+    let pi = 3.141592653589793 in
+    let r = if rfr == null then 0.0 else rfr in
+    let sqrt_t = math.sqrt(tte) in
+    let d1 = (math.log(spot / strike) + (r + vol * vol / 2.0) * tte) / (vol * sqrt_t) in
+    let d2 = d1 - vol * sqrt_t in
+    let nd1 = ncdf(d1) in
+    let nd2 = ncdf(d2) in
+    let npd1 = math.exp(0.0 - (d1 * d1) / 2.0) / math.sqrt(2.0 * pi) in
+    let discount = math.exp(0.0 - r * tte) in
+    let is_call = ot == "call" in
+    let delta = if is_call then nd1 else nd1 - 1.0 in
+    let gamma = npd1 / (spot * vol * sqrt_t) in
+    let vega = spot * npd1 * sqrt_t / 100.0 in
+    let theta = if is_call then
+      (0.0 - spot * npd1 * vol / (2.0 * sqrt_t) - r * strike * discount * nd2) / 365.0
+    else
+      (0.0 - spot * npd1 * vol / (2.0 * sqrt_t) + r * strike * discount * (1.0 - nd2)) / 365.0 in
+    let rho = if is_call then
+      strike * tte * discount * nd2 / 100.0
+    else
+      0.0 - strike * tte * discount * (1.0 - nd2) / 100.0 in
+    { delta: delta, gamma: gamma, vega: vega, theta: theta, rho: rho, d1: d1, d2: d2 }
+}
+
+let atm_call = black_scholes_greeks(100.0, 100.0, 0.2, 0.05, 1.0, "call")
+let atm_put  = black_scholes_greeks(100.0, 100.0, 0.2, 0.05, 1.0, "put")
+let itm_call = black_scholes_greeks(110.0, 100.0, 0.2, 0.05, 1.0, "call")
+let otm_call = black_scholes_greeks(90.0,  100.0, 0.2, 0.05, 1.0, "call")
+let expired  = black_scholes_greeks(100.0, 100.0, 0.2, 0.05, 0.0, "call")
+let null_inp = black_scholes_greeks(null,  100.0, 0.2, 0.05, 1.0, "call")
+
+test "ATM call delta near 0.5-0.7" { atm_call.delta > 0.5 && atm_call.delta < 0.7 }
+test "ATM put delta near -0.5 to -0.3" { atm_put.delta > 0.0 - 0.5 && atm_put.delta < 0.0 - 0.3 }
+test "call put delta sum equals 1" { (atm_call.delta + (0.0 - atm_put.delta)) > 0.99 && (atm_call.delta + (0.0 - atm_put.delta)) < 1.01 }
+test "ITM call delta greater than ATM" { itm_call.delta > atm_call.delta }
+test "OTM call delta less than ATM" { otm_call.delta < atm_call.delta }
+test "call put gamma equal" { atm_call.gamma > 0.0 && (atm_call.gamma - atm_put.gamma) < 0.0001 }
+test "call put vega equal" { atm_call.vega > 0.0 && (atm_call.vega - atm_put.vega) < 0.0001 }
+test "theta negative for call" { atm_call.theta < 0.0 }
+test "theta negative for put" { atm_put.theta < 0.0 }
+test "call rho positive" { atm_call.rho > 0.0 }
+test "put rho negative" { atm_put.rho < 0.0 }
+test "expired option returns null delta" { expired.delta == null }
+test "null spot returns null delta" { null_inp.delta == null }
+test "ncdf(0) equals 0.5" { ncdf(0.0) > 0.4999 && ncdf(0.0) < 0.5001 }
+test "ncdf(1.96) near 0.975" { ncdf(1.96) > 0.974 && ncdf(1.96) < 0.976 }
