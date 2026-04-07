@@ -110,35 +110,49 @@ A GET /finance/position/<account> response includes:
 
   {
     account:        "ACCT-123",
-    as_of_ts:       1775496255,         -- server wall clock, time-anchors digest
+    as_of_ts:       1775496255,
+    verification_summary: {
+      fills:    { checked: 3, valid: 3, invalid: 0, all_valid: true },
+      cash:     { checked: 1, valid: 1, invalid: 0, all_valid: true },
+      all_valid: true
+    },
     positions: [{
       instrument:   "AAPL",
-      qty:          200,                -- post corporate-action qty
+      qty:          200,
       price:        172,
       value:        34400,
       asset_class:  "equity",
-      var_95:       12.4,               -- 1-day 95% parametric VaR (USD)
-      var_99:       17.5,               -- 1-day 99% parametric VaR (USD)
-      volatility:   0.0021              -- realized vol from price history
+      greeks:       null,               -- non-null for options only
+      var_95:       12.4,
+      var_99:       17.5,
+      volatility:   0.0021,
+      hvar_95:      8.3,               -- historical VaR 95%
+      hvar_99:      14.1,              -- historical VaR 99%
+      es_95:        10.2,              -- expected shortfall 95% (CVaR)
+      es_99:        16.8               -- expected shortfall 99% (CVaR)
     }],
     cash_balance:   50000,
     nav:            84400,
-    nav_usd:        84400,              -- multi-currency NAV in USD base
-    fx_rates:       { "EUR": 1.08 },    -- FX rates derived from price claims
+    nav_usd:        84400,
+    fx_rates:       { "EUR": 1.08 },
     risk_state: {
-      gross_exposure:    34400,
-      net_exposure:      34400,
-      long_exposure:     34400,
-      short_exposure:    0,
-      leverage:          0.41,
-      concentration:     0.41,
-      portfolio_var_95:  12.4,          -- sum of position VaR at 95%
-      portfolio_var_99:  17.5,          -- sum of position VaR at 99%
-      portfolio_hvar_95: 8.3,          -- sum of historical VaR at 95%
-      portfolio_hvar_99: 14.1,         -- sum of historical VaR at 99%
+      gross_exposure:         34400,   -- delta-adjusted for options
+      net_exposure:           34400,
+      long_exposure:          34400,
+      short_exposure:         0,
+      leverage:               0.41,
+      concentration:          0.41,
+      portfolio_var_95:       12.4,    -- additive parametric VaR 95%
+      portfolio_var_99:       17.5,    -- additive parametric VaR 99%
+      portfolio_hvar_95:      8.3,     -- historical VaR 95%
+      portfolio_hvar_99:      14.1,    -- historical VaR 99%
+      portfolio_es_95:        10.2,    -- expected shortfall 95% (CVaR)
+      portfolio_es_99:        16.8,    -- expected shortfall 99% (CVaR)
+      portfolio_covar_var_95: 11.1,    -- correlation-aware VaR 95%
+      portfolio_covar_var_99: 15.7,    -- correlation-aware VaR 99%
       positions: [{ ... per-position risk ... }]
     },
-    state_digest:   "sha256:..."        -- canonical hash of all inputs + as_of_ts
+    state_digest:   "sha256:..."
   }
 
 ---
@@ -182,20 +196,27 @@ FX rates are derived from price claims where symbol matches XXX/USD. Cash
 and position values are converted to USD base currency using these rates.
 Positions with no FX rate are excluded from nav_usd.
 
-### Parametric & Historical VaR
-Per-position VaR is computed from realized volatility using the price claim
-history for each instrument's symbol:
+### Risk Suite
+Four complementary risk measures per position and portfolio:
 
-  returns = [(p[t] - p[t-1]) / p[t-1)] for consecutive price pairs]
-  volatility = sample stddev(returns)
-  var_95 = |position_value| x volatility x 1.645
-  var_99 = |position_value| x volatility x 2.326
+Parametric VaR — from realized volatility:
+  var_95 = |value| x stddev(returns) x 1.645
+  var_99 = |value| x stddev(returns) x 2.326
 
-Portfolio VaR is the sum of per-position VaR (additive, no correlation).
+Historical VaR — exact P&L distribution (252-day lookback):
+  Sorted returns, 5th/1st percentile loss. n >= 10 required.
 
-Historical VaR uses the exact P/L distribution: position_value x return for each
-historical price return, sorted ascending. VaR is the 5th/1st percentile loss.
-Requires n >= 10 returns. Uses full price history, not staleness-filtered prices.
+Expected Shortfall / CVaR — average loss beyond VaR threshold:
+  es_95 = mean of worst 5% of daily P&L observations
+  es_99 = mean of worst 1% of daily P&L observations
+  ES >= VaR always. Better tail risk measure for fat-tailed distributions.
+
+Correlation-aware VaR — full covariance matrix (Markowitz):
+  portfolio_variance = w^T * Sigma * w
+  Uses pairwise return covariances, aligned to 252-day common window.
+  Shows diversification benefit vs additive VaR.
+
+Exposures are delta-adjusted for options (unit_delta x spot x qty x multiplier).
 
 ---
 
