@@ -204,6 +204,42 @@ fn position_greeks(p, meta, spot_price, as_of_ts) {
 }
 
 
+fn dcf_nav_of(cash_flows, discount_rate, as_of_ts) {
+  let r = if discount_rate == null then 0.08 else discount_rate in
+  list.fold(cash_flows, 0.0, fn(acc, cf) {
+    let secs = cf.expected_ts - as_of_ts in
+    if secs <= 0 then acc
+    else
+      let t = cast.float(secs) / 31536000.0 in
+      let flow_type = if rec.has(cf, "flow_type") then cf.flow_type else "distribution" in
+      let amount = if rec.has(cf, "amount") then cf.amount else 0 in
+      let pv = cast.float(amount) / math.exp(r * t) in
+      if flow_type == "capital_call" then acc - pv
+      else acc + pv
+  })
+}
+
+fn private_nav_summary(cash_flows, discount_rate, as_of_ts) {
+  let r = if discount_rate == null then 0.08 else discount_rate in
+  let by_type = list.fold(cash_flows, { distributions: 0.0, capital_calls: 0.0, fees: 0.0, total_nav: 0.0, flow_count: 0 }, fn(acc, cf) {
+    let secs = cf.expected_ts - as_of_ts in
+    if secs <= 0 then acc
+    else
+      let t = cast.float(secs) / 31536000.0 in
+      let flow_type = if rec.has(cf, "flow_type") then cf.flow_type else "distribution" in
+      let amount = if rec.has(cf, "amount") then cf.amount else 0 in
+      let pv = cast.float(amount) / math.exp(r * t) in
+      if flow_type == "capital_call" then
+        { distributions: acc.distributions, capital_calls: acc.capital_calls + pv, fees: acc.fees, total_nav: acc.total_nav - pv, flow_count: acc.flow_count + 1 }
+      else if flow_type == "fee" then
+        { distributions: acc.distributions, capital_calls: acc.capital_calls, fees: acc.fees + pv, total_nav: acc.total_nav - pv, flow_count: acc.flow_count + 1 }
+      else
+        { distributions: acc.distributions + pv, capital_calls: acc.capital_calls, fees: acc.fees, total_nav: acc.total_nav + pv, flow_count: acc.flow_count + 1 }
+  }) in
+  { nav: by_type.total_nav, pv_distributions: by_type.distributions, pv_capital_calls: by_type.capital_calls, pv_fees: by_type.fees, flow_count: by_type.flow_count, discount_rate: r, as_of_ts: as_of_ts }
+}
+
+
 fn mean_of(values) {
   let n = list.len(values) in
   if n == 0 then 0.0
@@ -905,6 +941,8 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   ncdf: ncdf,
   black_scholes_greeks: black_scholes_greeks,
   position_greeks: position_greeks,
+  dcf_nav_of: dcf_nav_of,
+  private_nav_summary: private_nav_summary,
   effective_exposure_of: effective_exposure_of,
   tail_mean_of: tail_mean_of,
   mean_of: mean_of,

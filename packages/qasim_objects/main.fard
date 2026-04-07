@@ -139,6 +139,19 @@ fn compliance_rule(rule_id, account, rule_type, params, severity, effective_ts, 
   }, issuer_pk_hex, sig_b64)
 }
 
+fn cash_flow(flow_id, asset_id, account, flow_type, amount, currency, expected_ts, issuer_pk_hex, sig_b64) {
+  signed_object("cash_flow", {
+    flow_id: flow_id,
+    asset_id: asset_id,
+    account: account,
+    flow_type: flow_type,
+    amount: amount,
+    currency: currency,
+    expected_ts: expected_ts
+  }, issuer_pk_hex, sig_b64)
+}
+
+
 {
   canonical_digest: canonical_digest,
   signed_object: signed_object,
@@ -151,5 +164,6 @@ fn compliance_rule(rule_id, account, rule_type, params, severity, effective_ts, 
   counterparty: counterparty,
   portfolio: portfolio,
   collateral: collateral,
-  compliance_rule: compliance_rule
+  compliance_rule: compliance_rule,
+  cash_flow: cash_flow
 }
