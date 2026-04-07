@@ -209,6 +209,9 @@ fn post_compliance_rule_h(req, ctx) {
         rule_id, account,
         (if rec.has(p, "rule_type") then p.rule_type else ""),
         (if rec.has(p, "params") then p.params else {}),
+        (if rec.has(p, "severity") then p.severity else "hard"),
+        (if rec.has(p, "effective_ts") then p.effective_ts else 0),
+        (if rec.has(p, "expiry_ts") then p.expiry_ts else 0),
         issuer_pk_hex, sig_b64
       ) in
       let _ = sqlite.exec(db, str.concat([
@@ -235,7 +238,7 @@ fn compliance_check_h(req, ctx) {
     let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
     let risk_state = ctx.qasim_state.risk_state_of(positions, cash_balance) in
-    let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state) in
+    let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, now) in
     ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), compliance: compliance })
 }
 
