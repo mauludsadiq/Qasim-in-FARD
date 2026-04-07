@@ -217,7 +217,7 @@ fn align_returns(xs, ys, max_n) {
   { xs: xs2, ys: ys2, n: n2 }
 }
 
-fn portfolio_covar_var(positions, price_rows, prices_mod, z_score) {
+fn portfolio_covar_var(positions, price_rows, z_score) {
   let n = list.len(positions) in
   if n == 0 then 0.0
   else
@@ -366,8 +366,8 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
   let portfolio_var_99 = list.fold(position_risk, 0, fn(acc, p) { if p.var_99 == null then acc else acc + p.var_99 })
   let portfolio_hvar_95 = list.fold(position_risk, 0, fn(acc, p) { if p.hvar_95 == null then acc else acc + p.hvar_95 })
   let portfolio_hvar_99 = list.fold(position_risk, 0, fn(acc, p) { if p.hvar_99 == null then acc else acc + p.hvar_99 })
-  let covar_var_95 = portfolio_covar_var(positions, price_rows, null, 1.645)
-  let covar_var_99 = portfolio_covar_var(positions, price_rows, null, 2.326)
+  let covar_var_95 = portfolio_covar_var(positions, price_rows, 1.645)
+  let covar_var_99 = portfolio_covar_var(positions, price_rows, 2.326)
   {
     nav: nav,
     cash_balance: cash_balance,
