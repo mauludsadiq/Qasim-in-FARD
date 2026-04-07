@@ -21,7 +21,7 @@ fn signed_object(object_type, payload, issuer_pk_hex, sig_b64) {
   }
 }
 
-fn instrument(instrument_id, asset_class, symbol, currency, venue, multiplier, expiry_ts_unix, issuer_pk_hex, sig_b64) {
+fn instrument(instrument_id, asset_class, symbol, currency, venue, multiplier, expiry_ts_unix, strike, implied_vol, option_type, risk_free_rate, issuer_pk_hex, sig_b64) {
   signed_object("instrument", {
     instrument_id: instrument_id,
     asset_class: asset_class,
@@ -29,7 +29,11 @@ fn instrument(instrument_id, asset_class, symbol, currency, venue, multiplier, e
     currency: currency,
     venue: venue,
     multiplier: multiplier,
-    expiry_ts_unix: expiry_ts_unix
+    expiry_ts_unix: expiry_ts_unix,
+    strike: strike,
+    implied_vol: implied_vol,
+    option_type: option_type,
+    risk_free_rate: risk_free_rate
   }, issuer_pk_hex, sig_b64)
 }
 

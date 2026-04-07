@@ -1,6 +1,6 @@
 import("../packages/qasim_objects/main") as obj
 
-let inst = obj.instrument("INST-AAPL", "equity", "AAPL", "USD", "NASDAQ", 1, null, "pk1", "sig1")
+let inst = obj.instrument("INST-AAPL", "equity", "AAPL", "USD", "NASDAQ", 1, null, null, null, "call", 0.05, "pk1", "sig1")
 let px = obj.price_claim("AAPL/USD", 171, "NASDAQ", 1731000202, "pk1", "sig1")
 let ca = obj.corporate_action("CA-1", "AAPL", "split", 1732000000, 1732000000, 2, 1, 0, "USD", "pk1", "sig1")
 let cp = obj.counterparty("CP-1", "Goldman Sachs", "US", "A", "pk1", "sig1")

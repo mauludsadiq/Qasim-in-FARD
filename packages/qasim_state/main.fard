@@ -1,3 +1,4 @@
+import("std/math") as math
 import("std/cast") as cast
 import("std/str") as str
 import("std/list") as list
@@ -106,6 +107,81 @@ fn max_abs_weight_of(items) {
     let v = if x.weight == null then 0 else if x.weight < 0 then 0 - x.weight else x.weight
     if v > acc then v else acc
   })
+}
+
+
+fn ncdf(x) {
+  let pi = 3.141592653589793 in
+  let neg = x < 0.0 in
+  let ax = if neg then 0.0 - x else x in
+  let t = 1.0 / (1.0 + 0.2316419 * ax) in
+  let nd = math.exp(0.0 - (ax * ax) / 2.0) / math.sqrt(2.0 * pi) in
+  let poly = t * (0.319381530 + t * (0.0 - 0.356563782 + t * (1.781477937 + t * (0.0 - 1.821255978 + t * 1.330274429)))) in
+  let result = 1.0 - nd * poly in
+  if neg then 1.0 - result else result
+}
+
+fn npdf(x) {
+  let pi = 3.141592653589793 in
+  math.exp(0.0 - (x * x) / 2.0) / math.sqrt(2.0 * pi)
+}
+
+fn black_scholes_greeks(spot, strike, vol, risk_free_rate, time_to_expiry, option_type) {
+  if spot == null || strike == null || vol == null || time_to_expiry == null then
+    { delta: null, gamma: null, vega: null, theta: null, rho: null, d1: null, d2: null }
+  else if time_to_expiry <= 0.0 || vol <= 0.0 || spot <= 0.0 || strike <= 0.0 then
+    { delta: null, gamma: null, vega: null, theta: null, rho: null, d1: null, d2: null }
+  else
+    let r = if risk_free_rate == null then 0.0 else risk_free_rate in
+    let sqrt_t = math.sqrt(time_to_expiry) in
+    let d1 = (math.log(spot / strike) + (r + vol * vol / 2.0) * time_to_expiry) / (vol * sqrt_t) in
+    let d2 = d1 - vol * sqrt_t in
+    let nd1 = ncdf(d1) in
+    let nd2 = ncdf(d2) in
+    let npd1 = npdf(d1) in
+    let discount = math.exp(0.0 - r * time_to_expiry) in
+    let is_call = option_type == "call" in
+    let delta = if is_call then nd1 else nd1 - 1.0 in
+    let gamma = npd1 / (spot * vol * sqrt_t) in
+    let vega = spot * npd1 * sqrt_t / 100.0 in
+    let theta = if is_call then
+      (0.0 - spot * npd1 * vol / (2.0 * sqrt_t) - r * strike * discount * nd2) / 365.0
+    else
+      (0.0 - spot * npd1 * vol / (2.0 * sqrt_t) + r * strike * discount * (1.0 - nd2)) / 365.0 in
+    let rho = if is_call then
+      strike * time_to_expiry * discount * nd2 / 100.0
+    else
+      0.0 - strike * time_to_expiry * discount * (1.0 - nd2) / 100.0 in
+    { delta: delta, gamma: gamma, vega: vega, theta: theta, rho: rho, d1: d1, d2: d2 }
+}
+
+fn position_greeks(p, meta, spot_price, as_of_ts) {
+  if meta == null then null
+  else
+    let asset_class = if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    if asset_class != "option" then null
+    else
+      let strike = if rec.has(meta, "strike") then meta.strike else null in
+      let vol = if rec.has(meta, "implied_vol") then meta.implied_vol else null in
+      let expiry = if rec.has(meta, "expiry_ts_unix") then meta.expiry_ts_unix else 0 in
+      let option_type = if rec.has(meta, "option_type") then meta.option_type else "call" in
+      let rfr = if rec.has(meta, "risk_free_rate") then meta.risk_free_rate else 0.0 in
+      let now_ts = if as_of_ts == null then 0 else as_of_ts in
+      let secs_to_expiry = expiry - now_ts in
+      let time_to_expiry = cast.float(secs_to_expiry) / 31536000.0 in
+      let spot = if spot_price == null then null else cast.float(spot_price) in
+      let k = if strike == null then null else cast.float(strike) in
+      let greeks = black_scholes_greeks(spot, k, vol, rfr, time_to_expiry, option_type) in
+      let qty = if rec.has(p, "qty") then p.qty else 0 in
+      let multiplier = if rec.has(meta, "multiplier") then meta.multiplier else 1 in
+      {
+        delta: if greeks.delta == null then null else greeks.delta * cast.float(qty) * cast.float(multiplier),
+        gamma: if greeks.gamma == null then null else greeks.gamma * cast.float(qty) * cast.float(multiplier),
+        vega: if greeks.vega == null then null else greeks.vega * cast.float(qty) * cast.float(multiplier),
+        theta: if greeks.theta == null then null else greeks.theta * cast.float(qty) * cast.float(multiplier),
+        rho: if greeks.rho == null then null else greeks.rho * cast.float(qty) * cast.float(multiplier),
+        unit_greeks: greeks
+      }
 }
 
 
@@ -595,7 +671,8 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
     let price = prices_mod.consensus_price(price_rows, sym) in
     let value = value_position(qty, price, meta) in
     let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
-    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class }
+    let greeks = if asset_class == "option" then position_greeks({ qty: qty }, meta, price, as_of_ts) else null in
+    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class, greeks: greeks }
   })
 }
 
@@ -622,6 +699,9 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   position_var: position_var,
   historical_var_of: historical_var_of,
   position_historical_var: position_historical_var,
+  ncdf: ncdf,
+  black_scholes_greeks: black_scholes_greeks,
+  position_greeks: position_greeks,
   returns_from_prices: returns_from_prices,
   stddev_of: stddev_of,
   state_payload_from_objects: state_payload_from_objects,

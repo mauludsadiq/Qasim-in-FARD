@@ -1,0 +1,9 @@
+import("std/float") as float
+import("std/cast") as cast
+
+let x = cast.float(2)
+let sq = float.sqrt(x)
+let ln2 = float.ln(x)
+let e2 = float.exp(x)
+
+{ sqrt2: sq, ln2: ln2, e2: e2 }

@@ -1,0 +1,15 @@
+import("std/math") as math
+import("std/cast") as cast
+
+fn ncdf(x) {
+  let pi = 3.141592653589793 in
+  let neg = x < 0.0 in
+  let ax = if neg then 0.0 - x else x in
+  let t = 1.0 / (1.0 + 0.2316419 * ax) in
+  let nd = math.exp(0.0 - (ax * ax) / 2.0) / math.sqrt(2.0 * pi) in
+  let poly = t * (0.319381530 + t * (0.0 - 0.356563782 + t * (1.781477937 + t * (0.0 - 1.821255978 + t * 1.330274429)))) in
+  let result = 1.0 - nd * poly in
+  if neg then 1.0 - result else result
+}
+
+{ n0: ncdf(0.0), n1: ncdf(1.0), n_1: ncdf(0.0 - 1.0), n196: ncdf(1.96) }

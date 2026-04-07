@@ -1,0 +1,54 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/str") as str
+import("std/json") as json
+import("std/hash") as hash
+import("std/sqlite") as sqlite
+import("std/cast") as cast
+import("std/math") as math
+
+fn ncdf(x) {
+  let pi = 3.141592653589793 in
+  let neg = x < 0.0 in
+  let ax = if neg then 0.0 - x else x in
+  let t = 1.0 / (1.0 + 0.2316419 * ax) in
+  let nd = math.exp(0.0 - (ax * ax) / 2.0) / math.sqrt(2.0 * pi) in
+  let poly = t * (0.319381530 + t * (0.0 - 0.356563782 + t * (1.781477937 + t * (0.0 - 1.821255978 + t * 1.330274429)))) in
+  let result = 1.0 - nd * poly in
+  if neg then 1.0 - result else result
+}
+
+fn black_scholes_greeks(spot, strike, vol, risk_free_rate, time_to_expiry, option_type) {
+  if spot == null || strike == null || vol == null || time_to_expiry == null then
+    { delta: null, gamma: null, vega: null, theta: null, rho: null, d1: null, d2: null }
+  else if time_to_expiry <= 0.0 || vol <= 0.0 || spot <= 0.0 || strike <= 0.0 then
+    { delta: null, gamma: null, vega: null, theta: null, rho: null, d1: null, d2: null }
+  else
+    let r = if risk_free_rate == null then 0.0 else risk_free_rate in
+    let pi = 3.141592653589793 in
+    let sqrt_t = math.sqrt(time_to_expiry) in
+    let d1 = (math.log(spot / strike) + (r + vol * vol / 2.0) * time_to_expiry) / (vol * sqrt_t) in
+    let d2 = d1 - vol * sqrt_t in
+    let nd1 = ncdf(d1) in
+    let nd2 = ncdf(d2) in
+    let npd1 = math.exp(0.0 - (d1 * d1) / 2.0) / math.sqrt(2.0 * pi) in
+    let discount = math.exp(0.0 - r * time_to_expiry) in
+    let is_call = option_type == "call" in
+    let delta = if is_call then nd1 else nd1 - 1.0 in
+    let gamma = npd1 / (spot * vol * sqrt_t) in
+    let vega = spot * npd1 * sqrt_t / 100.0 in
+    let theta = if is_call then
+      (0.0 - spot * npd1 * vol / (2.0 * sqrt_t) - r * strike * discount * nd2) / 365.0
+    else
+      (0.0 - spot * npd1 * vol / (2.0 * sqrt_t) + r * strike * discount * (1.0 - nd2)) / 365.0 in
+    let rho = if is_call then
+      strike * time_to_expiry * discount * nd2 / 100.0
+    else
+      0.0 - strike * time_to_expiry * discount * (1.0 - nd2) / 100.0 in
+    { delta: delta, gamma: gamma, vega: vega, theta: theta, rho: rho, d1: d1, d2: d2 }
+}
+
+let atm_call = black_scholes_greeks(100.0, 100.0, 0.2, 0.05, 1.0, "call")
+let atm_put = black_scholes_greeks(100.0, 100.0, 0.2, 0.05, 1.0, "put")
+
+{ atm_call: atm_call, atm_put: atm_put }
