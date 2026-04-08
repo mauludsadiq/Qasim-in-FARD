@@ -233,6 +233,7 @@ Exposures are delta-adjusted for options (unit_delta x spot x qty x multiplier).
   /finance/price/claim              Submit a signed price
   /finance/live/price               Fetch and sign a live price feed
   /finance/ingest/compliance_rule   Register a signed compliance rule
+  /finance/ingest/cash_flow         Register a signed private market cash flow
   /finance/ingest/batch             Ingest array of signed objects (single chain link)
   /finance/replay                   Replay state from supplied data
 
@@ -253,6 +254,7 @@ Future-dated ts_unix values are rejected. URL-encoded path parameters are decode
   /finance/compliance/<account>                    Compliance check against all active rules
   /finance/compliance_at/<account>/<ts_unix>       Time-indexed compliance check
   /finance/pretrade                                Pre-trade what-if + compliance delta
+  /finance/private/nav/<account>                   Private market DCF NAV
   /finance/chain/verify                            Chain integrity check
   /health                                          Server health
 
@@ -406,18 +408,21 @@ Corporate actions are stored in object_store with object_type='corporate_action'
   fardrun test --program tests/test_qasim_objects_model.fard  12 tests
   fardrun test --program tests/test_qasim_prices.fard         13 tests
   fardrun test --program tests/test_qasim_state.fard          11 tests
-  45 tests total, all passing
+  fardrun test --program tests/test_qasim_greeks.fard         15 tests
+  fardrun test --program tests/test_qasim_compliance.fard     21 tests
+  fardrun test --program tests/test_qasim_risk.fard           11 tests
+  fardrun test --program tests/test_qasim_private.fard        12 tests
+  94 tests total, all passing
 
 ---
 
 ## Future Extensions
 
-- Correlation-aware portfolio VaR (covariance matrix)
 - Monte Carlo VaR (fixed-seed deterministic)
 - Matching and clearing engine
-- Private markets (DCF models, cash-flow schedules)
 - Integrations (Bloomberg, custodians, exchanges)
 - XBRL / regulatory export formats
+- Helm chart for Kubernetes deployment
 
 ---
 
@@ -552,6 +557,42 @@ objects are excluded silently. Each response includes:
 
 Endpoints with verification: /position, /compliance, /compliance_at,
 /attribution, /pretrade.
+
+---
+
+## Private Markets
+
+POST /finance/ingest/cash_flow ingests a signed cash flow schedule entry:
+
+  {
+    "flow_id": "CF1", "asset_id": "PE-FUND-1",
+    "account": "ACCT-123", "flow_type": "distribution",
+    "amount": 1000000, "currency": "USD",
+    "expected_ts": 1807041600
+  }
+
+flow_type: distribution | capital_call | fee
+capital_calls and fees are subtracted from NAV; distributions are added.
+
+GET /finance/private/nav/<account> returns DCF NAV at 8% continuous discount:
+
+  private_nav: {
+    nav:              482395.26,   -- net present value
+    pv_distributions: 943953.43,   -- PV of future distributions
+    pv_capital_calls: 461558.17,   -- PV of unfunded commitments
+    pv_fees:          0,
+    flow_count:       2,
+    discount_rate:    0.08,
+    as_of_ts:         1775605701
+  }
+
+Past flows (expected_ts <= as_of_ts) are excluded automatically.
+
+Illiquidity compliance rules:
+  max_illiquid_pct          {max_pct}   -- private_nav / total_nav limit
+  max_capital_call_exposure {max_value} -- PV unfunded commitments limit
+
+These rules are evaluated in /finance/compliance using live DCF NAV.
 
 ---
 
