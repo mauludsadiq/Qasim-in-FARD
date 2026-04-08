@@ -1,3 +1,4 @@
+import("std/cast") as cast
 import("std/sqlite") as sqlite
 import("std/str") as str
 import("std/list") as list
@@ -10,7 +11,7 @@ fn decode_price_rows(rows) {
     {
       symbol: p.symbol,
       mid: p.mid,
-      venue: p.venue,
+      venue: if rec.has(p, "venue") then p.venue else "",
       ts_unix: p.ts_unix,
       digest: r.digest,
       issuer_pk_hex: r.issuer_pk_hex,

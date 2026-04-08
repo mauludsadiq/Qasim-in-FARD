@@ -1,3 +1,4 @@
+import("std/cast") as cast
 import("std/str") as str
 import("std/list") as list
 import("std/rec") as rec
@@ -320,10 +321,24 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let flows = cash_flow_rows(db, account) in
   let private_summary = state_mod.private_nav_summary(flows, 0.08, now) in
   let public_nav = state_mod.nav_of(positions, state_mod.cash_balance_of(cash)) in
-  let total_nav = public_nav + private_summary.nav in
-  let total_nav_usd = nav_usd + private_summary.nav in
-  let risk_with_private = rec.set(rec.set(risk_state_var, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls) in
-  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, positions: positions, cash_balance: state_mod.cash_balance_of(cash), public_nav: public_nav, public_nav_usd: nav_usd, private_nav: private_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, dividend_cash: dividend_cash, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, meta: { fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count } })
+  let futures_positions = list.filter(positions, fn(p) { p.asset_class == "future" }) in
+  let total_mtm_pnl = list.fold(futures_positions, 0.0, fn(acc, p) {
+    if p.mtm_pnl == null then acc else acc + p.mtm_pnl
+  }) in
+  let total_variation_margin = list.fold(futures_positions, 0.0, fn(acc, p) {
+    if p.variation_margin == null then acc else acc + p.variation_margin
+  }) in
+  let total_initial_margin = list.fold(futures_positions, 0.0, fn(acc, p) {
+    if p.initial_margin == null then acc else acc + p.initial_margin
+  }) in
+  let total_notional = list.fold(futures_positions, 0.0, fn(acc, p) {
+    if p.notional == null then acc else acc + cast.float(p.notional)
+  }) in
+  let futures_summary = { count: list.len(futures_positions), total_notional: total_notional, total_mtm_pnl: total_mtm_pnl, total_variation_margin: total_variation_margin, total_initial_margin: total_initial_margin } in
+  let total_nav = public_nav + private_summary.nav + total_mtm_pnl in
+  let total_nav_usd = nav_usd + private_summary.nav + total_mtm_pnl in
+  let risk_with_private = rec.set(rec.set(rec.set(rec.set(risk_state_var, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls), "total_mtm_pnl", total_mtm_pnl), "total_initial_margin", total_initial_margin) in
+  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, positions: positions, cash_balance: state_mod.cash_balance_of(cash), public_nav: public_nav, public_nav_usd: nav_usd, private_nav: private_summary, futures: futures_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, dividend_cash: dividend_cash, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, meta: { fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count } })
 }
 
 
@@ -1428,8 +1443,16 @@ fn handle(req, ctx) {
     if !_auth.ok then auth_error(_auth.reason)
     else if req.body == "" then err_json_h(400, "request body required")
     else post_fill_h(req, ctx))
-  else if req.path == "/finance/price/claim" then (if req.body == "" then err_json_h(400, "request body required") else post_price_h(req, ctx))
-  else if req.path == "/finance/live/price" then (if req.body == "" then err_json_h(400, "request body required") else post_live_price_h(req, ctx))
+  else if req.path == "/finance/price/claim" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_price_h(req, ctx))
+  else if req.path == "/finance/live/price" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_live_price_h(req, ctx))
   else if str.starts_with(req.path, "/finance/compliance_at/") then compliance_at_h(req, ctx)
   else if str.starts_with(req.path, "/finance/compliance/") then compliance_check_h(req, ctx)
   else if str.starts_with(req.path, "/finance/attribution/") then attribution_h(req, ctx)

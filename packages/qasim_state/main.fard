@@ -13,11 +13,48 @@ fn value_position(qty, price, meta) {
     let asset_class = if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
     let multiplier = if rec.has(meta, "multiplier") then meta.multiplier else 1 in
     if asset_class == "equity" then qty * price * multiplier
-    else if asset_class == "future" then qty * price * multiplier
+    else if asset_class == "future" then
+      let initial_margin_rate = if rec.has(meta, "initial_margin_rate") then meta.initial_margin_rate else 0.05 in
+      qty * price * multiplier * initial_margin_rate
     else if asset_class == "option" then qty * price * multiplier
     else if asset_class == "fixed_income" then qty * (price / 100) * multiplier
     else if asset_class == "fx" then qty * price
     else qty * price * multiplier
+}
+
+fn notional_position(qty, price, meta) {
+  if price == null then null
+  else if meta == null then qty * price
+  else
+    let asset_class = if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    let multiplier = if rec.has(meta, "multiplier") then meta.multiplier else 1 in
+    if asset_class == "future" then qty * price * multiplier
+    else null
+}
+
+fn mtm_pnl_of(qty, current_price, entry_price, meta) {
+  if current_price == null || entry_price == null then 0.0
+  else
+    let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    let multiplier = if meta == null then 1 else if rec.has(meta, "multiplier") then meta.multiplier else 1 in
+    if asset_class == "future" then
+      cast.float(qty) * (cast.float(current_price) - cast.float(entry_price)) * cast.float(multiplier)
+    else 0.0
+}
+
+fn variation_margin_of(mtm_pnl) {
+  if mtm_pnl > 0.0 then mtm_pnl else 0.0
+}
+
+fn initial_margin_of(qty, price, meta) {
+  if price == null then 0.0
+  else
+    let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
+    if asset_class != "future" then 0.0
+    else
+      let multiplier = if rec.has(meta, "multiplier") then meta.multiplier else 1 in
+      let rate = if rec.has(meta, "initial_margin_rate") then meta.initial_margin_rate else 0.05 in
+      cast.float(if qty < 0 then 0 - qty else qty) * cast.float(price) * cast.float(multiplier) * cast.float(rate)
 }
 
 fn price_symbol_for(inst, meta) {
@@ -52,7 +89,19 @@ fn positions_from_fills_with_meta(fill_rows, price_rows, prices_mod, inst_rows) 
     let price = prices_mod.consensus_price(price_rows, sym) in
     let value = value_position(qty, price, meta) in
     let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
-    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class }
+    let inst_fills = list.filter(fill_rows, fn(f) { f.instrument == inst }) in
+    let entry_price = if asset_class == "future" then
+      let buy_fills = list.filter(inst_fills, fn(f) { f.side == "buy" }) in
+      let total_cost = list.fold(buy_fills, 0.0, fn(acc, f) { acc + cast.float(f.qty) * cast.float(f.price) }) in
+      let total_qty = list.fold(buy_fills, 0.0, fn(acc, f) { acc + cast.float(f.qty) }) in
+      if total_qty == 0.0 then price else total_cost / total_qty
+    else null in
+    let notional = if asset_class == "future" then notional_position(qty, price, meta) else null in
+    let mtm_pnl = if asset_class == "future" then mtm_pnl_of(qty, price, entry_price, meta) else null in
+    let var_margin = if asset_class == "future" then variation_margin_of(if mtm_pnl == null then 0.0 else mtm_pnl) else null in
+    let init_margin = if asset_class == "future" then initial_margin_of(qty, price, meta) else null in
+    let expiry_ts = if meta != null && rec.has(meta, "expiry_ts_unix") then meta.expiry_ts_unix else null in
+    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class, notional: notional, entry_price: entry_price, mtm_pnl: mtm_pnl, variation_margin: var_margin, initial_margin: init_margin, expiry_ts: expiry_ts }
   })
 }
 
@@ -1143,7 +1192,19 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
     let value = value_position(qty, price, meta) in
     let asset_class = if meta == null then "equity" else if rec.has(meta, "asset_class") then meta.asset_class else "equity" in
     let greeks = if asset_class == "option" then position_greeks({ qty: qty }, meta, price, as_of_ts) else null in
-    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class, greeks: greeks }
+    let inst_fills_a = list.filter(fill_rows, fn(f) { f.instrument == inst }) in
+    let entry_price = if asset_class == "future" then
+      let buy_fills = list.filter(inst_fills_a, fn(f) { f.side == "buy" }) in
+      let total_cost = list.fold(buy_fills, 0.0, fn(acc, f) { acc + cast.float(f.qty) * cast.float(f.price) }) in
+      let total_qty = list.fold(buy_fills, 0.0, fn(acc, f) { acc + cast.float(f.qty) }) in
+      if total_qty == 0.0 then price else total_cost / total_qty
+    else null in
+    let notional = if asset_class == "future" then notional_position(qty, price, meta) else null in
+    let mtm_pnl = if asset_class == "future" then mtm_pnl_of(qty, price, entry_price, meta) else null in
+    let var_margin = if asset_class == "future" then variation_margin_of(if mtm_pnl == null then 0.0 else mtm_pnl) else null in
+    let init_margin = if asset_class == "future" then initial_margin_of(qty, price, meta) else null in
+    let expiry_ts = if meta != null && rec.has(meta, "expiry_ts_unix") then meta.expiry_ts_unix else null in
+    { instrument: inst, qty: qty, price: price, value: value, asset_class: asset_class, greeks: greeks, notional: notional, entry_price: entry_price, mtm_pnl: mtm_pnl, variation_margin: var_margin, initial_margin: init_margin, expiry_ts: expiry_ts }
   })
 }
 
@@ -1183,6 +1244,9 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   dcf_nav_of: dcf_nav_of,
   private_nav_summary: private_nav_summary,
   effective_exposure_of: effective_exposure_of,
+  notional_position: notional_position,
+  mtm_pnl_of: mtm_pnl_of,
+  initial_margin_of: initial_margin_of,
   tail_mean_of: tail_mean_of,
   mean_of: mean_of,
   covariance_of: covariance_of,
