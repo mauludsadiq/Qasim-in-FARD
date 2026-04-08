@@ -325,6 +325,7 @@ Future-dated ts_unix values are rejected. URL-encoded path parameters are decode
   /finance/pretrade                                Pre-trade what-if + compliance delta
   /finance/private/nav/<account>                   Private market DCF NAV
   /finance/orders/<instrument>                     View orders by instrument (open/partial/filled)
+  /finance/audit/export/<account>                  One-click tamper-evident audit bundle
   /finance/chain/verify                            Chain integrity check
   /health                                          Server health
 
@@ -828,6 +829,41 @@ View interactively in Swagger UI:
   open http://localhost:8080
 
 Or paste the raw file into https://editor.swagger.io
+
+---
+
+## Audit Export
+
+GET /finance/audit/export/<account> returns a single tamper-evident bundle
+suitable for auditors, regulators, and Big-4 review:
+
+  {
+    account, as_of_ts,
+    verified:             true,          -- all Ed25519 signatures valid
+    verification_digest:  "sha256:...",  -- hash of verification_summary
+    positions:            [...],         -- full position snapshot (all asset classes)
+    cash_balance:         500000,
+    public_nav:           507192,
+    private_nav:          { nav, pv_distributions, pv_capital_calls, ... },
+    futures:              { total_notional, total_mtm_pnl, total_variation_margin, ... },
+    ir_risk:              { fi_count, total_dv01 },
+    total_nav:            933263,        -- unified NAV across all asset classes
+    risk_snapshot:        { ... },       -- all 6 VaR methods, Greeks, futures, IR
+    compliance_report:    { rule_count, compliance: { passed, results, breaches } },
+    attribution:          { ... },       -- FIFO P&L, cost basis, return per position
+    stress_scenarios:     [ ... ],       -- 10 named scenarios with before/after deltas
+    receipt_chain_digest: "sha256:...",  -- latest chain link
+    fill_count, cash_count, price_count,
+    audit_digest:         "sha256:..."   -- SHA256 of entire bundle
+  }
+
+audit_digest is computed as SHA256(json.encode(bundle)).
+Any alteration to any field — positions, NAV, compliance results, scenarios —
+invalidates audit_digest. Independent auditors can recompute it from raw data
+using the replay package (/finance/export/<account>).
+
+This endpoint combines the output of /finance/position, /finance/compliance,
+/finance/attribution, and all 10 stress scenarios into a single signed snapshot.
 
 ---
 
