@@ -40,6 +40,7 @@ env:
 
 secret:
   chainSecretHex: ""
+  adminKeyHash: ""  # SHA256 of "apikey:<your-admin-key>" -- required for write access
 
 livenessProbe:
   httpGet:

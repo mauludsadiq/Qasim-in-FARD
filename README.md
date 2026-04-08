@@ -25,6 +25,7 @@ and arrive at an identical result.
 Generate a signing key and start the server:
 
   export QASIM_CHAIN_SECRET_HEX=$(openssl rand -hex 32)
+export QASIM_ADMIN_KEY_HASH=$(echo -n "apikey:my-dev-key" | sha256sum | awk '{print "sha256:"$1}')
   fardrun run --program main.fard --out /tmp/qasim
 
 Server listens on http://0.0.0.0:9801
@@ -702,6 +703,57 @@ Illustrative results (ACCT-123):
   gaussian cholesky:      1789    (MC correlated)
   student-t cholesky:     2211    (+24% fat-tail premium at 95%)
   student-t 99%:          3986    (+57% fat-tail premium at 99%)
+
+---
+
+## Authentication & RBAC
+
+All write endpoints require an `X-API-Key` header. Read endpoints are open.
+
+### Roles
+
+  admin     -- full access: ingest, match, compliance rules, read, key management
+  trader    -- ingest + match + read
+  risk      -- manage compliance rules + read
+  readonly  -- read only
+
+### Bootstrap
+
+Set `QASIM_ADMIN_KEY_HASH` at startup (SHA256 of `apikey:<your-key>`):
+
+  export ADMIN_KEY="$(openssl rand -hex 32)"
+  export QASIM_ADMIN_KEY_HASH="$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')"
+  fardrun run --program main.fard --out /tmp/qasim
+
+The raw key is never stored — only its SHA256 hash.
+
+### Key Management
+
+  POST /admin/api_keys    -- create a key (admin only)
+  GET  /admin/api_keys    -- list all keys (admin only)
+
+  curl -X POST /admin/api_keys \
+    -H "X-API-Key: <admin-key>" \
+    -d '{"label":"trader-desk","role":"trader","key":"<key-value>"}'
+
+### Endpoint Permissions
+
+  /finance/ingest/*          -- write  (admin, trader)
+  /finance/match             -- match  (admin, trader)
+  /finance/pretrade          -- write  (admin, trader)
+  /finance/ingest/compliance_rule -- manage_rules (admin, risk)
+  /finance/position/*        -- open   (no auth required)
+  /finance/compliance/*      -- open
+  /finance/attribution/*     -- open
+  /finance/private/nav/*     -- open
+
+### Helm Deployment with RBAC
+
+  ADMIN_KEY="$(openssl rand -hex 32)"
+  ADMIN_HASH="$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')"
+  helm install qasim ./helm/qasim \
+    --set secret.chainSecretHex=$(openssl rand -hex 32) \
+    --set secret.adminKeyHash="${ADMIN_HASH}"
 
 ---
 

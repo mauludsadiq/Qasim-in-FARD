@@ -30,6 +30,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "qasim.fullname" . }}-secret
                   key: chainSecretHex
+            - name: QASIM_ADMIN_KEY_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "qasim.fullname" . }}-secret
+                  key: adminKeyHash
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

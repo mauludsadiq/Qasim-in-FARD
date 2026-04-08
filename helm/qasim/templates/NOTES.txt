@@ -8,7 +8,14 @@ Get the application URL:
   curl http://localhost:9801/health
 {{- end }}
 
-To run with a fresh chain secret:
-  kubectl create secret generic {{ include "qasim.fullname" . }}-secret \
-    --from-literal=chainSecretHex=$(openssl rand -hex 32) \
-    --dry-run=client -o yaml | kubectl apply -f -
+To deploy with full security:
+  ADMIN_KEY="$(openssl rand -hex 32)"
+  ADMIN_HASH="$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')"
+  helm install qasim ./helm/qasim \
+    --set secret.chainSecretHex=$(openssl rand -hex 32) \
+    --set secret.adminKeyHash="${ADMIN_HASH}"
+  echo "Your admin API key: ${ADMIN_KEY}"
+
+RBAC roles: admin | trader | risk | readonly
+Create keys: POST /admin/api_keys -H "X-API-Key: <admin-key>"
+  {"label":"my-trader","role":"trader","key":"<key-value>"}
