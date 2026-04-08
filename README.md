@@ -82,19 +82,29 @@ for production use.
         "feed_type":"yahoo","issuer_pk_hex":"DEV","issuer_secret_hex":"$ISSUER_SECRET"}"
   Returns real market price with signed receipt and source_body_digest.
 
-### 7. Query live position
+### 7. Submit and match orders
+
+  curl -X POST http://0.0.0.0:9801/finance/ingest/order \
+    -d '{"payload_json":"{\"order_id\":\"O-1\",\"account\":\"ACCT-A\",\"instrument\":\"AAPL\",\"side\":\"buy\",\"qty\":100,\"order_type\":\"limit\",\"limit_price\":175,\"ts_unix\":1731000000}","issuer_pk_hex":"pk","sig_b64":"sig"}'
+
+  curl -X POST http://0.0.0.0:9801/finance/match \
+    -d '{"instrument":"AAPL","issuer_pk_hex":"SYSTEM"}'
+
+  Returns fills_generated, fill details, prices. Fills appear in /finance/position.
+
+### 8. Query live position
 
   curl http://0.0.0.0:9801/finance/position/ACCT-123
 
 Response includes positions, cash_balance, nav, nav_usd, fx_rates, risk_state
 (with per-position and portfolio VaR), state_digest, and as_of_ts.
 
-### 8. Verify chain integrity
+### 9. Verify chain integrity
 
   curl http://0.0.0.0:9801/finance/chain/verify
   {"valid":true,"checked":12,"head":"sha256:..."}
 
-### 9. Export full replay package
+### 10. Export full replay package
 
   curl http://0.0.0.0:9801/finance/export/ACCT-123
 
@@ -494,7 +504,7 @@ Useful for compliance checks, position limits, and risk budgeting before executi
 
 ---
 
-## Compliance Rules Engine
+## Compliance Rules Engine (17 Rule Types)
 
 POST /finance/ingest/compliance_rule stores a signed rule with severity and timestamps:
 
@@ -506,9 +516,10 @@ POST /finance/ingest/compliance_rule stores a signed rule with severity and time
     "effective_ts": 0, "expiry_ts": 0
   }
 
-Supported rule types: max_position_size, max_concentration, max_leverage,
-max_gross_exposure, max_portfolio_var_95, max_portfolio_var_99, min_cash_pct,
-max_position_qty, max_asset_class_exposure, instrument_blacklist.
+Supported rule types (17 total): max_position_size, max_concentration, max_leverage,
+max_gross_exposure, max_portfolio_var_95/99, min_cash_pct, max_position_qty,
+max_asset_class_exposure, instrument_blacklist, max_delta_exposure, max_vega,
+max_portfolio_covar_var_95/99, max_es_95/99, max_illiquid_pct, max_capital_call_exposure.
 
 Each breach includes a suggested_action (e.g. "reduce AAPL by 1152").
 Rules with account="*" apply globally across all accounts.
