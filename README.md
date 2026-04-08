@@ -300,6 +300,7 @@ Exposures are delta-adjusted for options (unit_delta x spot x qty x multiplier).
   /finance/live/price               Fetch and sign a live price feed
   /finance/ingest/compliance_rule   Register a signed compliance rule
   /finance/ingest/cash_flow         Register a signed private market cash flow
+  /finance/ingest/instrument        Register instrument (equity, option, future, bond)
   /finance/ingest/order             Submit a signed order for matching
   /finance/ingest/batch             Ingest array of signed objects (single chain link)
   /finance/match                    Run price-time priority matching for an instrument
@@ -587,7 +588,7 @@ Useful for compliance checks, position limits, and risk budgeting before executi
 
 ---
 
-## Compliance Rules Engine (17 Rule Types)
+## Compliance Rules Engine (18 Rule Types)
 
 POST /finance/ingest/compliance_rule stores a signed rule with severity and timestamps:
 
@@ -599,10 +600,11 @@ POST /finance/ingest/compliance_rule stores a signed rule with severity and time
     "effective_ts": 0, "expiry_ts": 0
   }
 
-Supported rule types (17 total): max_position_size, max_concentration, max_leverage,
+Supported rule types (18 total): max_position_size, max_concentration, max_leverage,
 max_gross_exposure, max_portfolio_var_95/99, min_cash_pct, max_position_qty,
 max_asset_class_exposure, instrument_blacklist, max_delta_exposure, max_vega,
-max_portfolio_covar_var_95/99, max_es_95/99, max_illiquid_pct, max_capital_call_exposure.
+max_portfolio_covar_var_95/99, max_es_95/99, max_illiquid_pct, max_capital_call_exposure,
+max_margin_utilization.
 
 Each breach includes a suggested_action (e.g. "reduce AAPL by 1152").
 Rules with account="*" apply globally across all accounts.
@@ -691,8 +693,12 @@ Past flows (expected_ts <= as_of_ts) are excluded automatically.
 Illiquidity compliance rules:
   max_illiquid_pct          {max_pct}   -- private_nav / total_nav limit
   max_capital_call_exposure {max_value} -- PV unfunded commitments limit
+  max_margin_utilization    {max_pct}   -- variation_margin / initial_margin limit
+                                           fires when futures MTM gains exceed
+                                           max_pct% of initial margin posted
 
-These rules are evaluated in /finance/compliance using live DCF NAV.
+These rules are evaluated in /finance/compliance using live risk state including
+futures margin data, private DCF NAV, and full VaR/ES/Greeks.
 
 ---
 
