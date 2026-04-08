@@ -47,6 +47,10 @@ for production use.
     -H "Content-Type: application/json" \
     -d '{"payload_json":"{\"instrument_id\":\"AAPL\",\"asset_class\":\"equity\",\"symbol\":\"AAPL\",\"currency\":\"USD\",\"venue\":\"NASDAQ\",\"multiplier\":1,\"expiry_ts_unix\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
 
+  # Futures (E-mini S&P 500)
+  curl -X POST /finance/ingest/instrument -H "X-API-Key: <key>" \
+  -d '{"payload_json":"{\"instrument_id\":\"ESZ24\",\"asset_class\":\"future\",\"symbol\":\"ES\",\"currency\":\"USD\",\"venue\":\"CME\",\"multiplier\":50,\"expiry_ts_unix\":1778000000}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+
 ### 2. Ingest a fill
 
   curl -X POST http://0.0.0.0:9801/finance/ingest/fill \
@@ -182,11 +186,30 @@ records every request and response in an append-only tamper-evident log.
 ### Asset-class-aware valuation
 
   equity        qty x price x multiplier
-  future        qty x price x multiplier
-  option        qty x price x multiplier
   fixed_income  qty x (price / 100) x multiplier   (clean price convention)
   fx            qty x price
+  option        qty x price x multiplier  (Black-Scholes Greeks computed)
+  future        initial_margin = abs(qty) x price x multiplier x margin_rate
+                (value = margin posted, not notional)
 
+Futures positions carry additional fields:
+  notional         qty x price x multiplier  (gross exposure)
+  entry_price      VWAP of buy fills
+  mtm_pnl          qty x (current_price - entry_price) x multiplier
+  variation_margin max(mtm_pnl, 0)  -- receivable from CCP
+  initial_margin   abs(qty) x price x multiplier x initial_margin_rate (default 5%)
+  expiry_ts        from instrument metadata
+
+Portfolio futures summary in /finance/position response:
+  futures: {
+    count:                 1,
+    total_notional:        17675000,   -- gross notional exposure
+    total_mtm_pnl:         175000,     -- daily mark-to-market P&L
+    total_variation_margin: 175000,    -- margin receivable
+    total_initial_margin:  883750      -- margin posted
+  }
+
+MTM P&L is included in total_nav. Initial margin is tracked in risk_state.
 Unregistered instruments default to equity with multiplier 1.
 
 ### Recency-weighted consensus
