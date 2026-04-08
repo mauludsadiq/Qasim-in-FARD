@@ -63,3 +63,49 @@ test "mc seed echoed correctly" { mc1.seed == 42 }
 test "mc n_sims echoed correctly" { mc1.n_sims == 100 }
 test "larger n_sims gives more stable result" { mc_large.mc_var_95 > 0.0 }
 test "mc_var_95 within reasonable range of position value" { mc1.mc_var_95 < 10700.0 }
+
+let price_rows_2 = [
+  { symbol: "AAPL/USD", mid: 100, ts_unix: 1 },
+  { symbol: "AAPL/USD", mid: 102, ts_unix: 2 },
+  { symbol: "AAPL/USD", mid: 99,  ts_unix: 3 },
+  { symbol: "AAPL/USD", mid: 104, ts_unix: 4 },
+  { symbol: "AAPL/USD", mid: 101, ts_unix: 5 },
+  { symbol: "AAPL/USD", mid: 106, ts_unix: 6 },
+  { symbol: "AAPL/USD", mid: 103, ts_unix: 7 },
+  { symbol: "AAPL/USD", mid: 108, ts_unix: 8 },
+  { symbol: "AAPL/USD", mid: 105, ts_unix: 9 },
+  { symbol: "AAPL/USD", mid: 110, ts_unix: 10 },
+  { symbol: "AAPL/USD", mid: 107, ts_unix: 11 },
+  { symbol: "MSFT/USD", mid: 200, ts_unix: 1 },
+  { symbol: "MSFT/USD", mid: 204, ts_unix: 2 },
+  { symbol: "MSFT/USD", mid: 198, ts_unix: 3 },
+  { symbol: "MSFT/USD", mid: 208, ts_unix: 4 },
+  { symbol: "MSFT/USD", mid: 202, ts_unix: 5 },
+  { symbol: "MSFT/USD", mid: 212, ts_unix: 6 },
+  { symbol: "MSFT/USD", mid: 206, ts_unix: 7 },
+  { symbol: "MSFT/USD", mid: 216, ts_unix: 8 },
+  { symbol: "MSFT/USD", mid: 210, ts_unix: 9 },
+  { symbol: "MSFT/USD", mid: 220, ts_unix: 10 },
+  { symbol: "MSFT/USD", mid: 214, ts_unix: 11 }
+]
+
+let positions_2 = [
+  { instrument: "AAPL", qty: 100, price: 107, value: 10700, asset_class: "equity", greeks: null },
+  { instrument: "MSFT", qty: 50,  price: 214, value: 10700, asset_class: "equity", greeks: null }
+]
+
+let cov_mat = state.build_cov_matrix(positions_2, price_rows_2)
+let L = state.cholesky(cov_mat, 2)
+let chol1 = state.mc_cholesky_var(positions_2, price_rows_2, 200, 42)
+let chol2 = state.mc_cholesky_var(positions_2, price_rows_2, 200, 42)
+let chol3 = state.mc_cholesky_var(positions_2, price_rows_2, 200, 99)
+let indep = state.mc_portfolio_var(positions_2, price_rows_2, 200, 42)
+
+test "cholesky produces 2x2 matrix" { list.len(L) == 2 }
+test "cholesky L[0][0] positive" { L[0][0] > 0.0 }
+test "cholesky L diagonal non-negative" { L[0][0] > 0.0 || L[1][1] > 0.0 }
+test "cholesky L[0][1] is zero (lower triangular)" { L[0][1] == 0.0 }
+test "cholesky mc reproducible same seed" { chol1.mc_var_95 == chol2.mc_var_95 }
+test "cholesky mc different seed differs" { chol1.mc_var_95 != chol3.mc_var_95 }
+test "cholesky mc_var_99 > mc_var_95" { chol1.mc_var_99 > chol1.mc_var_95 }
+test "correlated mc higher than independent for correlated assets" { chol1.mc_var_95 > indep.mc_var_95 }

@@ -240,6 +240,101 @@ fn private_nav_summary(cash_flows, discount_rate, as_of_ts) {
 }
 
 
+fn matrix_get(mat, i, j) {
+  let row = mat[i] in
+  row[j]
+}
+
+fn matrix_set_row(mat, i, new_row) {
+  list.map(list.range(0, list.len(mat)), fn(idx) {
+    if idx == i then new_row else mat[idx]
+  })
+}
+
+fn row_set(row, j, val) {
+  list.map(list.range(0, list.len(row)), fn(idx) {
+    if idx == j then val else row[idx]
+  })
+}
+
+fn cholesky(cov_matrix, n) {
+  let zero_row = list.map(list.range(0, n), fn(_) { 0.0 }) in
+  let L = list.map(list.range(0, n), fn(_) { list.map(list.range(0, n), fn(_) { 0.0 }) }) in
+  list.fold(list.range(0, n), L, fn(L_acc, i) {
+    list.fold(list.range(0, i + 1), L_acc, fn(L2, j) {
+      let sum_k = list.fold(list.range(0, j), 0.0, fn(s, k) {
+        s + matrix_get(L2, i, k) * matrix_get(L2, j, k)
+      }) in
+      let cov_ij = matrix_get(cov_matrix, i, j) in
+      let new_val = if i == j then
+        let diag = cov_ij - sum_k in
+        if diag <= 0.0 then 0.0 else math.sqrt(diag)
+      else
+        let ljj = matrix_get(L2, j, j) in
+        if ljj == 0.0 then 0.0 else (cov_ij - sum_k) / ljj
+      in
+      let old_row = L2[i] in
+      let new_row = row_set(old_row, j, new_val) in
+      matrix_set_row(L2, i, new_row)
+    })
+  })
+}
+
+fn build_cov_matrix(positions, price_rows) {
+  let n = list.len(positions) in
+  let pos_returns = list.map(positions, fn(p) {
+    let sym = price_symbol_for(p.instrument, null) in
+    let rets = returns_from_prices(price_rows, sym) in
+    let rets252 = if list.len(rets) > 252 then list.drop(rets, list.len(rets) - 252) else rets in
+    { instrument: p.instrument, value: cast.float(if p.value == null then 0 else p.value), returns: rets252 }
+  }) in
+  list.map(list.range(0, n), fn(i) {
+    let pi = pos_returns[i] in
+    list.map(list.range(0, n), fn(j) {
+      let pj = pos_returns[j] in
+      let aligned = align_returns(pi.returns, pj.returns, 252) in
+      if aligned.n < 2 then 0.0 else covariance_of(aligned.xs, aligned.ys)
+    })
+  })
+}
+
+fn mc_cholesky_var(positions, price_rows, n_sims, seed) {
+  let n = list.len(positions) in
+  if n == 0 then { mc_var_95: 0.0, mc_var_99: 0.0, n_sims: n_sims, seed: seed, method: "cholesky" }
+  else
+    let weights = list.map(positions, fn(p) {
+      cast.float(if p.value == null then 0 else p.value)
+    }) in
+    let cov_matrix = build_cov_matrix(positions, price_rows) in
+    let L = cholesky(cov_matrix, n) in
+    let sim_range = list.range(0, n_sims) in
+    let result = list.fold(sim_range, { state: seed, pnls: [] }, fn(acc, _) {
+      let z_result = list.fold(list.range(0, n), { state: acc.state, zs: [] }, fn(zacc, _) {
+        let r = lcg_normal(zacc.state) in
+        { state: r.state, zs: list.append(zacc.zs, r.value) }
+      }) in
+      let corr_result = list.fold(list.range(0, n), { pnl: 0.0 }, fn(cacc, i) {
+        let corr_i = list.fold(list.range(0, i + 1), 0.0, fn(s, j) {
+          s + matrix_get(L, i, j) * z_result.zs[j]
+        }) in
+        let wi = weights[i] in
+        { pnl: cacc.pnl + wi * corr_i }
+      }) in
+      { state: z_result.state, pnls: list.append(acc.pnls, corr_result.pnl) }
+    }) in
+    let sorted = list.sort_by(result.pnls, fn(a, b) {
+      if a < b then 0 - 1 else if a > b then 1 else 0
+    }) in
+    let idx_95 = n_sims * 5 / 100 in
+    let idx_99 = n_sims * 1 / 100 in
+    let loss_95 = sorted[if idx_95 < 1 then 1 else idx_95] in
+    let loss_99 = sorted[if idx_99 < 1 then 1 else idx_99] in
+    let mc_var_95 = if loss_95 < 0.0 then 0.0 - loss_95 else 0.0 in
+    let mc_var_99 = if loss_99 < 0.0 then 0.0 - loss_99 else 0.0 in
+    { mc_var_95: mc_var_95, mc_var_99: mc_var_99, n_sims: n_sims, seed: seed, method: "cholesky" }
+}
+
+
 fn lcg_next(state) {
   let a = 6364136223846793005 in
   let c = 1442695040888963407 in
@@ -495,6 +590,7 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
   let covar_var_95 = portfolio_covar_var(positions, price_rows, 1.645)
   let covar_var_99 = portfolio_covar_var(positions, price_rows, 2.326)
   let mc_var = mc_portfolio_var(positions, price_rows, 1000, 42)
+  let mc_chol = mc_cholesky_var(positions, price_rows, 1000, 42)
   {
     nav: nav,
     cash_balance: cash_balance,
@@ -516,6 +612,8 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
     portfolio_mc_var_99: mc_var.mc_var_99,
     mc_n_sims: mc_var.n_sims,
     mc_seed: mc_var.seed,
+    portfolio_mc_chol_var_95: mc_chol.mc_var_95,
+    portfolio_mc_chol_var_99: mc_chol.mc_var_99,
     positions: position_risk
   }
 }
@@ -1020,6 +1118,9 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   black_scholes_greeks: black_scholes_greeks,
   position_greeks: position_greeks,
   mc_portfolio_var: mc_portfolio_var,
+  mc_cholesky_var: mc_cholesky_var,
+  cholesky: cholesky,
+  build_cov_matrix: build_cov_matrix,
   lcg_normal: lcg_normal,
   dcf_nav_of: dcf_nav_of,
   private_nav_summary: private_nav_summary,
