@@ -1,961 +1,606 @@
 # Qasim in FARD
 
-Deterministic, verifiable financial state engine built in FARD.
+Deterministic, cryptographically verifiable financial state engine built in FARD.
 
----
+-----
 
 ## What is Qasim?
 
-Qasim is a cryptographically anchored financial computation system. It ingests
-signed transactions, fills, instruments, corporate actions, and multi-source
-price feeds, computes recency-weighted consensus prices, derives asset-class-aware
-positions and multi-currency NAV, and produces a fully reproducible state digest.
+Qasim is a cryptographically anchored financial computation system. It ingests signed fills, instruments, corporate actions, and multi-source price feeds, computes recency-weighted consensus prices, derives asset-class-aware positions and unified NAV across public, private, and derivatives books, and produces a fully reproducible state digest.
 
-Every output is traceable back to canonical payloads, source data, cryptographic
-hashes, and signatures. No hidden state. No ambiguity. No trust assumptions.
+Every output is traceable back to canonical payloads, cryptographic hashes, and Ed25519 signatures. No hidden state. No ambiguity. No trust assumptions.
 
-The core guarantee: given the same inputs, Qasim will always produce the same
-state digest. Any third party can replay the full computation from exported data
-and arrive at an identical result.
+**The core guarantee:** given the same inputs, Qasim always produces the same state digest. Any third party can replay the full computation from exported data and arrive at an identical result.
 
----
+-----
 
 ## Quickstart
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/mauludsadiq/Qasim-in-FARD.git
 cd Qasim-in-FARD
 
-# 2. Set secrets and start
 export QASIM_CHAIN_SECRET_HEX=$(openssl rand -hex 32)
-export QASIM_ADMIN_KEY_HASH=$(echo -n 'apikey:my-dev-key' | sha256sum | awk '{print "sha256:"$1}')
+export QASIM_ADMIN_KEY_HASH=$(echo -n "apikey:my-dev-key" | sha256sum | awk '{print "sha256:"$1}')
 fardrun run --program main.fard --out /tmp/qasim
 ```
 
-Server listens on http://0.0.0.0:9801
+Server listens on **http://0.0.0.0:9801**. Your admin API key is `my-dev-key`.
 
 ```bash
 curl http://0.0.0.0:9801/health
+# {"status":"ok"}
 ```
 
-Your admin API key is `my-dev-key` (set via QASIM_ADMIN_KEY_HASH above).
-QASIM_CHAIN_SECRET_HEX anchors the receipt chain — preserve it across restarts.
+`QASIM_CHAIN_SECRET_HEX` anchors the receipt chain — preserve it across restarts and store in a secrets manager for production. `QASIM_ADMIN_KEY_HASH` is `SHA256("apikey:<key>")` and bootstraps RBAC.
 
-**Docker:** `docker compose up`
+**Docker:**
 
-**Kubernetes:**
+```bash
+docker compose up
+```
+
+**Kubernetes (Helm):**
+
 ```bash
 ADMIN_KEY=$(openssl rand -hex 32)
 ADMIN_HASH=$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')
-helm install qasim ./helm/qasim --set secret.chainSecretHex=$(openssl rand -hex 32) --set secret.adminKeyHash="${ADMIN_HASH}"
+helm install qasim ./helm/qasim \
+  --set secret.chainSecretHex=$(openssl rand -hex 32) \
+  --set secret.adminKeyHash="${ADMIN_HASH}"
+echo "Admin key: ${ADMIN_KEY}"
 ```
 
----
+-----
 
 ## Walkthrough
 
-### 1. Create an API key (RBAC)
+### 1. Create an API key
 
-  # Bootstrap: your admin key is "my-dev-key" (set in QASIM_ADMIN_KEY_HASH at startup)
-  curl -X POST http://0.0.0.0:9801/admin/api_keys \
-    -H "Content-Type: application/json" \
-    -H "X-API-Key: my-dev-key" \
-    -d '{"label":"trader-1","role":"trader","key":"trader-secret"}'
+```bash
+curl -X POST http://0.0.0.0:9801/admin/api_keys \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: my-dev-key" \
+  -d '{"label":"trader-1","role":"trader","key":"trader-secret"}'
+```
 
-  # All write endpoints now require -H "X-API-Key: <key>"
-  # Roles: admin | trader | risk | readonly
+Roles: `admin` | `trader` | `risk` | `readonly`. All write endpoints require `-H "X-API-Key: <key>"`.
 
 ### 2. Register instruments
 
-  # Equity
-  curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d '{"payload_json":"{\"instrument_id\":\"AAPL\",\"asset_class\":\"equity\",\"symbol\":\"AAPL\",\"currency\":\"USD\",\"venue\":\"NASDAQ\",\"multiplier\":1,\"expiry_ts_unix\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+```bash
+# Equity
+curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"payload_json":"{\"instrument_id\":\"AAPL\",\"asset_class\":\"equity\",\"symbol\":\"AAPL\",\"currency\":\"USD\",\"venue\":\"NASDAQ\",\"multiplier\":1,\"expiry_ts_unix\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
 
-  # Bond (UST 10Y: 4.5% coupon, semi-annual, YTM 4.75%)
-  curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d '{"payload_json":"{\"instrument_id\":\"UST10Y\",\"asset_class\":\"fixed_income\",\"symbol\":\"UST10Y\",\"currency\":\"USD\",\"venue\":\"OTC\",\"multiplier\":1000,\"expiry_ts_unix\":1778000000,\"coupon_rate\":0.045,\"face_value\":100,\"coupon_frequency\":2,\"ytm\":0.0475}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+# Bond (UST 10Y: 4.5% coupon, semi-annual, YTM 4.75%)
+curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"payload_json":"{\"instrument_id\":\"UST10Y\",\"asset_class\":\"fixed_income\",\"symbol\":\"UST10Y\",\"currency\":\"USD\",\"venue\":\"OTC\",\"multiplier\":1000,\"expiry_ts_unix\":1778000000,\"coupon_rate\":0.045,\"face_value\":100,\"coupon_frequency\":2,\"ytm\":0.0475}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
 
-  # Futures (E-mini S&P 500, contract size 50)
-  curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d '{"payload_json":"{\"instrument_id\":\"ESZ24\",\"asset_class\":\"future\",\"symbol\":\"ES\",\"currency\":\"USD\",\"venue\":\"CME\",\"multiplier\":50,\"expiry_ts_unix\":1778000000}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+# Futures (E-mini S&P 500, multiplier 50)
+curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"payload_json":"{\"instrument_id\":\"ESZ24\",\"asset_class\":\"future\",\"symbol\":\"ES\",\"currency\":\"USD\",\"venue\":\"CME\",\"multiplier\":50,\"expiry_ts_unix\":1778000000}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+```
 
 ### 3. Ingest cash and fills
 
-  NOW=$(date +%s)
-  curl -X POST http://0.0.0.0:9801/finance/ingest/cash \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d "{\"payload_json\":\"{\\\"account\\\":\\\"ACCT-123\\\",\\\"currency\\\":\\\"USD\\\",\\\"amount\\\":500000,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+```bash
+NOW=$(date +%s)
 
-  curl -X POST http://0.0.0.0:9801/finance/ingest/fill \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d "{\"payload_json\":\"{\\\"fill_id\\\":\\\"F1\\\",\\\"order_id\\\":\\\"O1\\\",\\\"account\\\":\\\"ACCT-123\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"side\\\":\\\"buy\\\",\\\"qty\\\":100,\\\"price\\\":170,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+curl -X POST http://0.0.0.0:9801/finance/ingest/cash \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d "{\"payload_json\":\"{\\\"account\\\":\\\"ACCT-123\\\",\\\"currency\\\":\\\"USD\\\",\\\"amount\\\":500000,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
 
-### 4. Submit price claims
+curl -X POST http://0.0.0.0:9801/finance/ingest/fill \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d "{\"payload_json\":\"{\\\"fill_id\\\":\\\"F1\\\",\\\"order_id\\\":\\\"O1\\\",\\\"account\\\":\\\"ACCT-123\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"side\\\":\\\"buy\\\",\\\"qty\\\":100,\\\"price\\\":170,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+```
 
-  NOW=$(date +%s)
-  curl -X POST http://0.0.0.0:9801/finance/price/claim \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d "{\"payload_json\":\"{\\\"symbol\\\":\\\"AAPL/USD\\\",\\\"mid\\\":172,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+### 4. Submit a price
 
-### 5. Register compliance rules (admin/risk only)
+```bash
+NOW=$(date +%s)
 
-  curl -X POST http://0.0.0.0:9801/finance/ingest/compliance_rule \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d '{"payload_json":"{\"rule_id\":\"R1\",\"account\":\"ACCT-123\",\"rule_type\":\"max_position_size\",\"params\":{\"instrument\":\"AAPL\",\"max_value\":50000},\"severity\":\"hard\",\"effective_ts\":0,\"expiry_ts\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+curl -X POST http://0.0.0.0:9801/finance/price/claim \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d "{\"payload_json\":\"{\\\"symbol\\\":\\\"AAPL/USD\\\",\\\"mid\\\":172,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+```
+
+### 5. Register a compliance rule
+
+```bash
+curl -X POST http://0.0.0.0:9801/finance/ingest/compliance_rule \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"payload_json":"{\"rule_id\":\"R1\",\"account\":\"ACCT-123\",\"rule_type\":\"max_position_size\",\"params\":{\"instrument\":\"AAPL\",\"max_value\":50000},\"severity\":\"hard\",\"effective_ts\":0,\"expiry_ts\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+```
 
 ### 6. Submit and match orders
 
-  NOW=$(date +%s)
-  curl -X POST http://0.0.0.0:9801/finance/ingest/order \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d "{\"payload_json\":\"{\\\"order_id\\\":\\\"O-BUY-1\\\",\\\"account\\\":\\\"ACCT-A\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"side\\\":\\\"buy\\\",\\\"qty\\\":100,\\\"order_type\\\":\\\"limit\\\",\\\"limit_price\\\":175,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+```bash
+NOW=$(date +%s)
 
-  # Run matching engine (compliance-gated)
-  curl -X POST http://0.0.0.0:9801/finance/match \
-    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
-    -d '{"instrument":"AAPL","compliance_mode":"block_on_hard","issuer_pk_hex":"DEV"}'
-  → { fills_generated, fills, blocked_matches, blocked }
+curl -X POST http://0.0.0.0:9801/finance/ingest/order \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d "{\"payload_json\":\"{\\\"order_id\\\":\\\"O-BUY-1\\\",\\\"account\\\":\\\"ACCT-A\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"side\\\":\\\"buy\\\",\\\"qty\\\":100,\\\"order_type\\\":\\\"limit\\\",\\\"limit_price\\\":175,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+
+curl -X POST http://0.0.0.0:9801/finance/match \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"instrument":"AAPL","compliance_mode":"block_on_hard","issuer_pk_hex":"DEV"}'
+```
+
+Returns `fills_generated`, `fills`, `blocked_matches`, and `blocked` (with breach reasons).
 
 ### 7. Query live position
 
-  curl http://0.0.0.0:9801/finance/position/ACCT-123
+```bash
+curl http://0.0.0.0:9801/finance/position/ACCT-123
+```
 
-  Response includes:
-    verified, verification_digest  -- Ed25519 signature validity
-    positions                      -- all asset classes with Greeks/DV01/MTM
-    public_nav, private_nav, total_nav
-    futures: { total_notional, total_mtm_pnl, total_variation_margin }
-    ir_risk: { total_dv01, portfolio_mod_duration }
-    risk_state: { portfolio_var_95, portfolio_mc_chol_var_95,
-                  portfolio_mc_t_var_95, portfolio_es_95, ... }
-    state_digest                   -- SHA256 of entire verified state
+Response includes `verified`, `verification_digest`, `positions` (all asset classes with Greeks/DV01/MTM), `public_nav`, `private_nav`, `total_nav`, `futures` summary, `ir_risk` summary, `risk_state` (6 VaR methods), and `state_digest`.
 
 ### 8. Check compliance
 
-  curl http://0.0.0.0:9801/finance/compliance/ACCT-123
-  → { passed, results[{rule_id, rule_type, passed, severity, breach, suggested_action}],
-      breach_count, hard_breach_count, private_nav_dcf }
+```bash
+curl http://0.0.0.0:9801/finance/compliance/ACCT-123
+```
+
+Returns `passed`, `results` (per rule), `breach_count`, `hard_breach_count`, each breach with `suggested_action`.
 
 ### 9. Liquidity forecast
 
-  curl http://0.0.0.0:9801/finance/liquidity/ACCT-123
-  → { current_cash, margin_buffer, liquidity_score, warnings[],
-      projected: { days_30, days_90, days_365 } }
+```bash
+curl http://0.0.0.0:9801/finance/liquidity/ACCT-123
+```
+
+Returns `current_cash`, `margin_buffer`, `liquidity_score` (0-100), `warnings`, and `projected` cash flows at 30, 90, and 365 days.
 
 ### 10. Audit export
 
-  curl http://0.0.0.0:9801/finance/audit/export/ACCT-123
-  → single tamper-evident bundle with audit_digest
-    includes positions, risk, compliance, 10 stress scenarios, attribution
-    any field alteration invalidates audit_digest
+```bash
+curl http://0.0.0.0:9801/finance/audit/export/ACCT-123
+```
+
+Returns a single tamper-evident bundle with `audit_digest` (SHA256 of the entire bundle). Includes positions, risk snapshot, compliance report, 10 stress scenarios, attribution, and receipt chain digest. Any field alteration invalidates `audit_digest`.
 
 ### 11. Verify chain integrity
 
-  curl http://0.0.0.0:9801/finance/chain/verify
-  → {"valid":true,"checked":12,"head":"sha256:..."}
+```bash
+curl http://0.0.0.0:9801/finance/chain/verify
+# {"valid":true,"checked":12,"head":"sha256:..."}
+```
 
-### 12. Export full replay package
+### 12. Export replay package
 
-  curl http://0.0.0.0:9801/finance/export/ACCT-123
-  → all fills, cash, prices, positions, NAV, risk state, state_digest
-    any party can replay and arrive at identical state_digest
+```bash
+curl http://0.0.0.0:9801/finance/export/ACCT-123
+```
 
----
+Returns all fills, cash, prices, positions, NAV, and `state_digest`. Any party can replay this and arrive at an identical digest.
 
-## Position Response
+-----
 
-A GET /finance/position/<account> response includes:
+## Asset Classes
 
-  {
-    account:        "ACCT-123",
-    as_of_ts:       1775496255,
-    verification_summary: {
-      fills:    { checked: 3, valid: 3, invalid: 0, all_valid: true },
-      cash:     { checked: 1, valid: 1, invalid: 0, all_valid: true },
-      all_valid: true
-    },
-    positions: [{
-      instrument:   "AAPL",
-      qty:          200,
-      price:        172,
-      value:        34400,
-      asset_class:  "equity",
-      greeks:       null,               -- non-null for options only
-      var_95:       12.4,
-      var_99:       17.5,
-      volatility:   0.0021,
-      hvar_95:      8.3,               -- historical VaR 95%
-      hvar_99:      14.1,              -- historical VaR 99%
-      es_95:        10.2,              -- expected shortfall 95% (CVaR)
-      es_99:        16.8               -- expected shortfall 99% (CVaR)
-    }],
-    cash_balance:   50000,
-    nav:            84400,
-    nav_usd:        84400,
-    fx_rates:       { "EUR": 1.08 },
-    risk_state: {
-      gross_exposure:         34400,   -- delta-adjusted for options
-      net_exposure:           34400,
-      long_exposure:          34400,
-      short_exposure:         0,
-      leverage:               0.41,
-      concentration:          0.41,
-      portfolio_var_95:       12.4,    -- additive parametric VaR 95%
-      portfolio_var_99:       17.5,    -- additive parametric VaR 99%
-      portfolio_hvar_95:      8.3,     -- historical VaR 95%
-      portfolio_hvar_99:      14.1,    -- historical VaR 99%
-      portfolio_es_95:        10.2,    -- expected shortfall 95% (CVaR)
-      portfolio_es_99:        16.8,    -- expected shortfall 99% (CVaR)
-      portfolio_covar_var_95: 11.1,    -- correlation-aware VaR 95%
-      portfolio_covar_var_99: 15.7,    -- correlation-aware VaR 99%
-      positions: [{ ... per-position risk ... }]
-    },
-    state_digest:   "sha256:..."
-  }
+Qasim handles six asset classes with appropriate valuation and risk measures for each.
 
----
+|Asset class |Value                         |Risk measures                              |
+|------------|------------------------------|-------------------------------------------|
+|equity      |qty × price × multiplier      |Parametric VaR, Historical VaR, ES         |
+|fixed_income|qty × (price/100) × multiplier|DV01, Macaulay/Modified Duration, Convexity|
+|option      |qty × price × multiplier      |Black-Scholes Greeks (Δ, Γ, ν, θ, ρ)       |
+|future      |initial_margin (5% default)   |MTM P&L, Notional, Variation/Initial Margin|
+|fx          |qty × price                   |VaR, multi-currency NAV                    |
+|private     |DCF at 8% discount rate       |Illiquidity %, Capital Call Exposure       |
 
-## Core Properties
-
-### Deterministic
-Same inputs produce same outputs and same digests. No randomness. Wall clock
-is only used for staleness filtering and as_of_ts anchoring — never in the
-computation itself.
-
-### Verifiable
-All data is hash-addressed, signature-backed, and replayable. The receipt chain
-records every request and response in an append-only tamper-evident log.
-
-### Asset-class-aware valuation
-
-  equity        qty x price x multiplier
-  fixed_income  qty x (price / 100) x multiplier   (clean price convention)
-  fx            qty x price
-  option        qty x price x multiplier  (Black-Scholes Greeks computed)
-  future        initial_margin = abs(qty) x price x multiplier x margin_rate
-                (value = margin posted, not notional)
-
-Futures positions carry additional fields:
-  notional         qty x price x multiplier  (gross exposure)
-  entry_price      VWAP of buy fills
-  mtm_pnl          qty x (current_price - entry_price) x multiplier
-  variation_margin max(mtm_pnl, 0)  -- receivable from CCP
-  initial_margin   abs(qty) x price x multiplier x initial_margin_rate (default 5%)
-  expiry_ts        from instrument metadata
-
-Portfolio futures summary in /finance/position response:
-  futures: {
-    count:                 1,
-    total_notional:        17675000,   -- gross notional exposure
-    total_mtm_pnl:         175000,     -- daily mark-to-market P&L
-    total_variation_margin: 175000,    -- margin receivable
-    total_initial_margin:  883750      -- margin posted
-  }
-
-MTM P&L is included in total_nav. Initial margin is tracked in risk_state.
-
-Fixed income positions carry IR risk fields:
-  ir_risk: {
-    macaulay_duration:  7.81,    -- time-weighted PV / price (years)
-    modified_duration:  7.63,    -- mac_dur / (1 + ytm/m)
-    convexity:          69.5,    -- second-order price sensitivity
-    dv01:              -524.21,  -- $ change per 1bp yield move (negative = long)
-    ytm:                0.0475,  -- yield to maturity
-    coupon_rate:        0.045,
-    face_value:         100,
-    clean_price:        98.10
-  }
-
-Portfolio IR summary in /finance/position response:
-  ir_risk: {
-    fi_count:              1,
-    total_dv01:           -524.21,   -- portfolio dollar duration
-    portfolio_mod_duration: 7.63    -- value-weighted modified duration
-  }
-
-Bond instrument registration (dedicated constructor):
-  { "instrument_id": "UST10Y", "asset_class": "fixed_income",
-    "symbol": "UST10Y", "currency": "USD", "venue": "OTC",
-    "multiplier": 1000, "expiry_ts_unix": 1778000000,
-    "coupon_rate": 0.045, "face_value": 100,
-    "coupon_frequency": 2, "ytm": 0.0475 }
-
-Discounting uses discrete semi-annual compounding: DF = (1 + ytm/m)^(-t*m)
 Unregistered instruments default to equity with multiplier 1.
 
-### Recency-weighted consensus
+### Futures
+
+Futures value = margin posted (not notional). Additional position fields:
 
-  weight = 300 - (now - ts_unix)   minimum: 1
-  weighted_mean = sum(weight x mid) / sum(weight)
+```
+notional          qty × price × multiplier
+entry_price       VWAP of buy fills
+mtm_pnl           qty × (current_price - entry_price) × multiplier
+variation_margin  max(mtm_pnl, 0)
+initial_margin    abs(qty) × price × multiplier × initial_margin_rate
+expiry_ts         from instrument metadata
+```
 
-The most recent source gets maximum weight (300). Staleness limit is 300s.
-Median and trimmed mean (drops outer quartile) are also computed.
+MTM P&L is included in `total_nav`. Portfolio futures summary in `/finance/position`:
 
-### Corporate actions
-Splits and reverse splits are ingested as signed events and applied
-chronologically when computing positions. The position cache is invalidated
-on any new corporate action.
+```json
+"futures": {
+  "count": 1,
+  "total_notional": 17675000,
+  "total_mtm_pnl": 175000,
+  "total_variation_margin": 175000,
+  "total_initial_margin": 883750
+}
+```
+
+### Fixed Income
+
+Bond registration requires coupon and yield fields:
+
+```json
+{
+  "instrument_id": "UST10Y",
+  "asset_class": "fixed_income",
+  "coupon_rate": 0.045,
+  "face_value": 100,
+  "coupon_frequency": 2,
+  "ytm": 0.0475,
+  "expiry_ts_unix": 1778000000
+}
+```
+
+Discounting: `DF = (1 + ytm/m)^(-t×m)` (discrete semi-annual). Each fixed income position includes:
+
+```json
+"ir_risk": {
+  "macaulay_duration": 7.81,
+  "modified_duration": 7.63,
+  "convexity": 69.5,
+  "dv01": -524.21,
+  "ytm": 0.0475,
+  "coupon_rate": 0.045,
+  "face_value": 100,
+  "clean_price": 98.10
+}
+```
+
+Portfolio IR summary in `/finance/position`:
+
+```json
+"ir_risk": {
+  "fi_count": 1,
+  "total_dv01": -524.21,
+  "portfolio_mod_duration": 7.63
+}
+```
+
+-----
+
+## Risk Suite
+
+Six VaR methods computed on every `/finance/position` call.
+
+**Parametric VaR** — from realized volatility:
+
+```
+var_95 = |value| × stddev(returns) × 1.645
+var_99 = |value| × stddev(returns) × 2.326
+```
+
+**Historical VaR** — exact P&L distribution, 252-day lookback. Requires n ≥ 10.
+
+**Expected Shortfall (CVaR)** — mean loss beyond VaR threshold. ES ≥ VaR always.
+
+**Covariance VaR** — full Markowitz covariance matrix: `variance = w^T × Σ × w`. Shows diversification benefit vs additive VaR.
+
+**Gaussian Cholesky MC** — 1000 correlated simulations, seed=42, fully reproducible. LCG + Box-Muller, Cholesky decomposition in pure FARD.
+
+**Student-t Cholesky MC** — same as above but draws from t(ν=4). +24% VaR premium at 95%, +57% at 99%.
+
+Illustrative results (mixed equity portfolio):
+
+```
+gaussian independent:   299    (uncorrelated baseline)
+analytic covar:        1705    (correlation-aware)
+gaussian cholesky:     1789    (MC correlated)
+student-t cholesky:    2211    (+24% fat-tail premium at 95%)
+student-t 99%:         3986    (+57% fat-tail premium at 99%)
+```
+
+Exposures are delta-adjusted for options: `unit_delta × spot × qty × multiplier`.
+
+-----
 
-### Multi-currency NAV
-FX rates are derived from price claims where symbol matches XXX/USD. Cash
-and position values are converted to USD base currency using these rates.
-Positions with no FX rate are excluded from nav_usd.
+## Compliance Rules Engine
 
-### Risk Suite
-Four complementary risk measures per position and portfolio:
+18 rule types evaluated against live risk state including futures margins, private DCF NAV, VaR, ES, and Greeks.
 
-Parametric VaR — from realized volatility:
-  var_95 = |value| x stddev(returns) x 1.645
-  var_99 = |value| x stddev(returns) x 2.326
+```bash
+curl -X POST http://0.0.0.0:9801/finance/ingest/compliance_rule \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"payload_json":"{\"rule_id\":\"R1\",\"account\":\"ACCT-123\",\"rule_type\":\"max_margin_utilization\",\"params\":{\"max_pct\":80},\"severity\":\"hard\",\"effective_ts\":0,\"expiry_ts\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+```
 
-Historical VaR — exact P&L distribution (252-day lookback):
-  Sorted returns, 5th/1st percentile loss. n >= 10 required.
+|Category |Rule types                                                                                                |
+|---------|----------------------------------------------------------------------------------------------------------|
+|Position |`max_position_size`, `max_position_qty`, `instrument_blacklist`                                           |
+|Portfolio|`max_concentration`, `max_leverage`, `max_gross_exposure`, `max_asset_class_exposure`                     |
+|Cash     |`min_cash_pct`                                                                                            |
+|Greeks   |`max_delta_exposure`, `max_vega`                                                                          |
+|VaR      |`max_portfolio_var_95`, `max_portfolio_var_99`, `max_portfolio_covar_var_95`, `max_portfolio_covar_var_99`|
+|Tail Risk|`max_es_95`, `max_es_99`                                                                                  |
+|Private  |`max_illiquid_pct`, `max_capital_call_exposure`                                                           |
+|Futures  |`max_margin_utilization`                                                                                  |
 
-Expected Shortfall / CVaR — average loss beyond VaR threshold:
-  es_95 = mean of worst 5% of daily P&L observations
-  es_99 = mean of worst 1% of daily P&L observations
-  ES >= VaR always. Better tail risk measure for fat-tailed distributions.
+Each breach includes a `suggested_action`. Rules with `account="*"` apply globally. `passed=true` only when zero hard breaches. Pre-trade compliance delta available via `POST /finance/pretrade`.
 
-Correlation-aware VaR — full covariance matrix (Markowitz):
-  portfolio_variance = w^T * Sigma * w
-  Uses pairwise return covariances, aligned to 252-day common window.
-  Shows diversification benefit vs additive VaR.
-
-Monte Carlo VaR — deterministic simulation (pure-FARD LCG + Box-Muller):
-  1000 scenarios, fixed seed=42, fully reproducible across runs
-  portfolio_mc_var_95/99, mc_n_sims, mc_seed in every risk_state response
-
-Exposures are delta-adjusted for options (unit_delta x spot x qty x multiplier).
-
----
-
-## Endpoints
-
-### Ingest (POST)
-
-  /finance/ingest/instrument        Register instrument with asset class
-  /finance/ingest/corporate_action  Record split, reverse split, or dividend
-  /finance/ingest/tx                Record a transaction
-  /finance/ingest/cash              Record a cash balance
-  /finance/ingest/order             Record an order
-  /finance/ingest/fill              Record an execution fill
-  /finance/price/claim              Submit a signed price
-  /finance/live/price               Fetch and sign a live price feed
-  /finance/ingest/compliance_rule   Register a signed compliance rule
-  /finance/ingest/cash_flow         Register a signed private market cash flow
-  /finance/ingest/instrument        Register instrument (equity, option, future, bond)
-  /finance/ingest/order             Submit a signed order for matching
-  /finance/ingest/batch             Ingest array of signed objects (single chain link)
-  /finance/match                    Run price-time priority matching for an instrument
-  /finance/replay                   Replay state from supplied data
-
-All mutating endpoints require a non-empty body. Ed25519 signatures are verified
-before storage. Records are immutable — first write wins (INSERT OR IGNORE).
-Future-dated ts_unix values are rejected. URL-encoded path parameters are decoded.
-
-### Query (GET)
-
-  /finance/export/<account>                        Full replay package
-  /finance/price/aggregate/<symbol>                Multi-source price consensus
-  /finance/state_at/<account>/<ts_unix>            Time-indexed state
-  /finance/export_at/<account>/<ts_unix>           Time-indexed export
-  /finance/state_payload/<account>/<ts_unix>       Raw state digest payload
-  /finance/scenario_at/<account>/<ts_unix>/<scenario>     Scenario evaluation
-  /finance/position/<account>                      Live position, NAV, VaR, Greeks, verification
-  /finance/attribution/<account>                   Performance attribution (P&L, cost basis, return)
-  /finance/compliance/<account>                    Compliance check against all active rules
-  /finance/compliance_at/<account>/<ts_unix>       Time-indexed compliance check
-  /finance/pretrade                                Pre-trade what-if + compliance delta
-  /finance/private/nav/<account>                   Private market DCF NAV
-  /finance/orders/<instrument>                     View orders by instrument (open/partial/filled)
-  /finance/audit/export/<account>                  One-click tamper-evident audit bundle
-  /finance/liquidity/<account>                     30/90/365-day liquidity forecast
-  /finance/chain/verify                            Chain integrity check
-  /health                                          Server health
-
----
-
-## Price Consensus
-
-### Staleness
-MAX_PRICE_AGE = 86400 seconds (1 day). A price is valid at time t only if
-ts_unix <= t and (t - ts_unix) <= 86400. Stale prices are excluded from
-valuation. Future-dated prices are rejected at ingest. Historical VaR uses
-all_price_rows (no staleness filter) to preserve full return history.
-
-### Aggregation output
-  mean           unweighted average
-  weighted_mean  recency-weighted average (used as consensus_price)
-  median         middle value of sorted price series
-  trimmed_mean   drops outer quartile, averages remainder (null if n < 4)
-  variance       population variance
-  outliers       sources where |mid - mean|^2 > 4 * variance
-
----
-
-## Canonical State Model
-
-  state_digest = SHA256(
-    account, as_of_ts,
-    fill_digests, cash_digests, price_digests,
-    positions, nav, risk_state
-  )
-
-Positions include: qty, price, value, asset_class, greeks (options only).
-Risk state includes: gross/net/long/short exposure, leverage, concentration,
-portfolio_var_95/99 (additive), portfolio_hvar_95/99 (historical exact),
-portfolio_covar_var_95/99 (correlation-aware covariance matrix VaR).
-
-Live /finance/position/ passes as_of_ts = server wall clock, making every
-snapshot uniquely time-anchored. Use /finance/state_at/ for reproducible
-digests at a specific historical timestamp.
-
----
-
-## Time-Indexed State
-
-  state(t) = f(fills <= t, prices <= t)
-
-All _at endpoints accept a ts_unix cutoff. Only data at or before t is used.
-No forward-looking data is ever used.
-
----
-
-## Scenario Analysis
-
-Scenarios apply deterministic shocks to base state without modifying it.
-
-  GET /finance/scenario_at/<account>/<ts_unix>/<scenario>
-
-Instrument shock map (ad hoc):  AAPL:-0.2,MSFT:-0.1
-Named scenarios:
-
-  Directional:    equity_down_10, equity_up_10, market_crash_20, bull_case
-  Single name:    tech_selloff, single_name_gap_down
-  Sigma shocks:   sigma_2, sigma_3, sigma_4, sigma_4_t
-  Historical:     gfc_2008, covid_crash, rates_shock
-
-Sigma shocks use fixed per-instrument volatility estimates:
-  sigma_2:    -3.4%   (2 standard deviations)
-  sigma_3:    -5.1%   (3 standard deviations)
-  sigma_4:    -6.8%   (4 standard deviations, Gaussian)
-  sigma_4_t:  -8.5%   (4 standard deviations, Student-t fat-tail adjusted)
-
-Historical crisis scenarios:
-  gfc_2008:     AAPL -57%, MSFT -44%, default -38%
-  covid_crash:  AAPL -31%, MSFT -29%, default -34%
-  rates_shock:  AAPL -18%, MSFT -15%, default -12%
-
-Each scenario returns:
-  shocked_positions  -- per-instrument shock, base/shocked price, pnl
-  shocked_nav        -- portfolio NAV after shock
-  pnl                -- total portfolio P&L
-  summary            -- { base_nav, shocked_nav, total_pnl, pnl_pct,
-                          max_single_loss, positions_shocked }
-  scenario_digest    -- SHA256 of all scenario inputs and outputs
-
-Stress test results (ACCT-123, illustrative):
-  sigma_4:    -4.1%    (Gaussian 4-sigma)
-  sigma_4_t:  -5.2%    (fat-tail adjusted, +26% premium)
-  covid_crash: -18.8%
-  gfc_2008:   -34.6%   (binding tail constraint)
-
----
-
-## Receipt Chain
-
-Every request is recorded in receipt_log:
-
-  chain_digest_n = SHA256(chain_digest_{n-1}, req_digest, res_digest, state_digest)
-
-Genesis: "GENESIS"
-
-Response headers per request:
-  X-Qasim-Chain-Digest       current chain head
-  X-Qasim-Chain-Signature    Ed25519 signature over chain head
-  X-Qasim-Chain-Public-Key   verifying public key
-  X-Qasim-Request-Digest     SHA256 of canonical request
-  X-Qasim-Response-Digest    SHA256 of canonical response
-
-GET /finance/chain/verify walks the full log, recomputes every digest from
-stored pre-images, and verifies linkage. Returns {valid, checked, head}.
-
----
-
-## Cryptographic Signing
-
-Chain signing: Ed25519. Key from QASIM_CHAIN_SECRET_HEX at startup.
-
-Payload signing: all ingest payloads carry issuer_pk_hex and sig_b64,
-verified via Ed25519 before storage. Use pk_hex = "DEV" in development.
-
-Supported feed_types: simple_json, yahoo (Yahoo Finance via User-Agent header).
-
-Live feed signing: POST /finance/live/price fetches an external URL, builds
-a canonical receipt, and signs it with the caller's Ed25519 key
-(issuer_secret_hex). Verifiable against issuer_pk_hex with no shared secret.
-
----
-
-## In-Memory Position Cache
-
-Positions are cached in a process-level mutex keyed by:
-
-  SHA256(account + fill_digests + cash_digests + price_digests + ca_digests)
-
-Cache hits skip position recomputation entirely. Any new fill, cash entry,
-price claim, or corporate action changes the key and triggers recomputation.
-Cache is correct by construction: same key always maps to same positions.
-
----
-
-## Architecture
-
-  main.fard
-    DB schema, ctx wiring, position cache, chain witnessing, net.serve
-
-  packages/
-    qasim_http/      routing, all handlers, request/response shaping
-    qasim_prices/    price loading, staleness, aggregation, weighted consensus,
-                     median, trimmed mean
-    qasim_state/     positions, NAV, risk state, VaR, corporate actions, FX
-    qasim_scenarios/ scenario evaluation, shock maps, named library
-    qasim_crypto/    Ed25519 chain signing
-    qasim_objects/   canonical signed object constructors
-
-All routing lives in qasim_http. main.fard wires dependencies into a ctx
-record and delegates every request to qasim_http.handle(req, ctx).
-
----
-
-## Storage
-
-SQLite tables (all append-only via INSERT OR IGNORE):
-
-  tx              Signed transaction records
-  fills           Signed fill records (source of position truth)
-  orders          Signed order records
-  cash_objects    Signed cash records
-  price_claims    Signed multi-source price records
-  object_store    Unified index by object type (instruments, prices, CAs, fills)
-  receipt_log     Append-only chain of request/response digests
-
-Positions and NAV are computed from fills, not tx.
-Corporate actions are stored in object_store with object_type='corporate_action'.
-
----
-
-## Test Suite
-
-  fardrun test --program tests/test_qasim_objects.fard        9 tests
-  fardrun test --program tests/test_qasim_objects_model.fard  12 tests
-  fardrun test --program tests/test_qasim_prices.fard         13 tests
-  fardrun test --program tests/test_qasim_state.fard          11 tests
-  fardrun test --program tests/test_qasim_greeks.fard         15 tests
-  fardrun test --program tests/test_qasim_compliance.fard     21 tests
-  fardrun test --program tests/test_qasim_risk.fard           11 tests
-  fardrun test --program tests/test_qasim_private.fard        12 tests
-  fardrun test --program tests/test_qasim_matching.fard       11 tests
-  fardrun test --program tests/test_qasim_monte_carlo.fard    12 tests
-  117 tests total, all passing
-
----
-
-## Future Extensions
-
-- Integrations (Bloomberg, custodians, exchanges)
-- XBRL / regulatory export formats with embedded digests
-- Helm chart for Kubernetes deployment
-- Correlation-aware Monte Carlo (Cholesky decomposition)
-- Stress testing with shocked covariance matrix and Greeks re-computation
-
----
-
-## Performance Attribution
-
-GET /finance/attribution/<account> returns per-position P&L attribution:
-
-  {
-    beginning_nav:    2026,
-    current_nav:      5152,
-    attribution: {
-      portfolio_return: 0.0237,
-      total_pnl:        48,
-      positions: [{
-        instrument:     "AAPL",
-        avg_cost:       171,
-        current_price:  173,
-        unrealized_pnl: 48,
-        realized_pnl:   0,
-        total_pnl:      48,
-        contribution:   0.0237
-      }]
-    }
-  }
-
-cost_basis = weighted average fill price (buys only)
-realized_pnl = FIFO P&L on closed positions
-contribution = position_pnl / beginning_nav
-portfolio_return = total_pnl / beginning_nav
-
----
-
-## Batch Ingest
-
-POST /finance/ingest/batch accepts an array of signed objects:
-
-  {
-    "items": [
-      { "object_type": "fill", "payload_json": "...", "issuer_pk_hex": "...", "sig_b64": "..." },
-      { "object_type": "cash", ... },
-      { "object_type": "price_claim", ... }
-    ]
-  }
-
-Each item is verified and routed by object_type. All accepted items share a
-single chain link. Returns { accepted, rejected, results } with per-item status.
-Supports: fill, cash, price_claim, instrument, corporate_action, order.
-
----
-
-## Pre-Trade What-If
-
-POST /finance/pretrade simulates a proposed order without writing to DB:
-
-  { "account": "ACCT-123", "instrument": "AAPL", "side": "buy", "qty": 100, "price": 172 }
-
-Returns current state, hypothetical state (with synthetic fill applied), and delta:
-
-  delta: { nav, cash_balance, gross_exposure, leverage, concentration }
-
-Full risk suite (parametric VaR, historical VaR) computed on both states.
-Useful for compliance checks, position limits, and risk budgeting before execution.
-
----
-
-## Compliance Rules Engine (18 Rule Types)
-
-POST /finance/ingest/compliance_rule stores a signed rule with severity and timestamps:
-
-  {
-    "rule_id": "R1", "account": "ACCT-123",
-    "rule_type": "max_position_size",
-    "params": {"instrument": "AAPL", "max_value": 10000},
-    "severity": "hard",
-    "effective_ts": 0, "expiry_ts": 0
-  }
-
-Supported rule types (18 total): max_position_size, max_concentration, max_leverage,
-max_gross_exposure, max_portfolio_var_95/99, min_cash_pct, max_position_qty,
-max_asset_class_exposure, instrument_blacklist, max_delta_exposure, max_vega,
-max_portfolio_covar_var_95/99, max_es_95/99, max_illiquid_pct, max_capital_call_exposure,
-max_margin_utilization.
-
-Each breach includes a suggested_action (e.g. "reduce AAPL by 1152").
-Rules with account="*" apply globally across all accounts.
-evaluate_compliance returns hard_breaches, warnings, and info separately.
-passed=true only when zero hard breaches.
-
-GET /finance/compliance/<account> and GET /finance/compliance_at/<account>/<ts>
-return the full compliance state with verification_summary.
-
-POST /finance/pretrade returns compliance_delta: new_breaches and resolved_breaches
-after the proposed trade. trade_blocked=true only for new hard breaches.
-
----
-
-## Option Greeks (Black-Scholes)
-
-Register an option instrument with strike, implied_vol, option_type, risk_free_rate:
-
-  POST /finance/ingest/instrument
-  { "instrument_id": "AAPL-CALL-260", "asset_class": "option",
-    "symbol": "AAPL", "strike": 260, "implied_vol": 0.25,
-    "option_type": "call", "risk_free_rate": 0.05,
-    "expiry_ts_unix": 1778000000, "multiplier": 100 }
-
-Positions with asset_class="option" include a greeks field:
-
-  greeks: {
-    delta: 99.18,   -- position delta (qty x multiplier x unit_delta)
-    gamma: 0.00495,
-    vega:  40.53,   -- per 1% vol move
-    theta: -0.173,  -- per calendar day
-    rho:   611.6,   -- per 1% rate move
-    unit_greeks: { delta: 0.9918, gamma: 0.0000495, ... }
-  }
-
-Normal CDF via Abramowitz-Stegun 5-term Horner approximation.
-time_to_expiry computed from expiry_ts_unix - as_of_ts in years.
-
----
-
-## Signature Verification on Read
-
-All major query endpoints verify Ed25519 signatures on every object fetched
-from the database before using it in computation. Tampered or missing-sig
-objects are excluded silently. Each response includes:
-
-  verification_summary: {
-    fills: { checked: 3, valid: 3, invalid: 0, all_valid: true },
-    cash:  { checked: 1, valid: 1, invalid: 0, all_valid: true },
-    all_valid: true
-  }
-
-Endpoints with verification: /position, /compliance, /compliance_at,
-/attribution, /pretrade.
-
----
-
-## Private Markets
-
-POST /finance/ingest/cash_flow ingests a signed cash flow schedule entry:
-
-  {
-    "flow_id": "CF1", "asset_id": "PE-FUND-1",
-    "account": "ACCT-123", "flow_type": "distribution",
-    "amount": 1000000, "currency": "USD",
-    "expected_ts": 1807041600
-  }
-
-flow_type: distribution | capital_call | fee
-capital_calls and fees are subtracted from NAV; distributions are added.
-
-GET /finance/private/nav/<account> returns DCF NAV at 8% continuous discount:
-
-  private_nav: {
-    nav:              482395.26,   -- net present value
-    pv_distributions: 943953.43,   -- PV of future distributions
-    pv_capital_calls: 461558.17,   -- PV of unfunded commitments
-    pv_fees:          0,
-    flow_count:       2,
-    discount_rate:    0.08,
-    as_of_ts:         1775605701
-  }
-
-Past flows (expected_ts <= as_of_ts) are excluded automatically.
-
-Illiquidity compliance rules:
-  max_illiquid_pct          {max_pct}   -- private_nav / total_nav limit
-  max_capital_call_exposure {max_value} -- PV unfunded commitments limit
-  max_margin_utilization    {max_pct}   -- variation_margin / initial_margin limit
-                                           fires when futures MTM gains exceed
-                                           max_pct% of initial margin posted
-
-These rules are evaluated in /finance/compliance using live risk state including
-futures margin data, private DCF NAV, and full VaR/ES/Greeks.
-
----
-
-## Matching Engine
-
-POST /finance/match runs price-time priority (FIFO) matching for an instrument:
-
-  { "instrument": "AAPL", "issuer_pk_hex": "DEV" }
-
-Matching rules:
-- Limit orders match when buy_limit >= sell_limit
-- Market orders match against any resting order
-- Match price = resting (maker) order price
-- Partial fills supported — order status: open | partial | filled
-- Both buy and sell fills written as signed objects to fills + object_store
-
-GET /finance/orders/<instrument> returns order book with fill status:
-
-  orders: [{
-    order_id:   "O-BUY-1",
-    account:    "ACCT-A",
-    side:       "buy",
-    qty:        100,
-    limit_price: 175,
-    filled_qty: 60,
-    status:     "partial"
-  }]
-
-Network test: buy 100 @ 175 vs sell 60 @ 173 → 2 fills at 173, qty=60.
-Buy order remains partial (40 unfilled). Fills appear in /finance/position.
-
----
-
-## Monte Carlo VaR
-
-Four VaR methods in every /finance/position response:
-
-  portfolio_mc_var_95/99         Gaussian independent (baseline)
-  portfolio_mc_chol_var_95/99    Gaussian Cholesky (correlated)
-  portfolio_mc_t_var_95/99       Student-t Cholesky (fat-tail, nu=4)
-  portfolio_covar_var_95/99      Analytic covariance (Markowitz)
-
-Pure-FARD LCG (no external PRNG, fully deterministic):
-  lcg_next(state) = |state * 6364136223846793005 + 1442695040888963407|
-  Box-Muller: N(0,1) from two uniform LCG draws
-  Student-t:  t = Z / sqrt(Chi2(nu)/nu), Chi2 via sum of nu squared normals
-
-Cholesky decomposition (pure FARD matrix library):
-  build_cov_matrix: n x n covariance matrix from aligned 252-day returns
-  cholesky(Sigma, n): lower triangular L where Sigma = LL^T
-  Correlated draw: x = L * z where z ~ N(0,I) or t(nu)
-
-All methods: n_sims=1000, seed=42, fully reproducible and auditable.
-mc_t_nu=4 (standard for financial returns — heavier tails than Gaussian).
-
-Illustrative results (ACCT-123):
-  gaussian independent:    299    (uncorrelated, underestimates)
-  analytic covar:         1705    (correlation-aware)
-  gaussian cholesky:      1789    (MC correlated)
-  student-t cholesky:     2211    (+24% fat-tail premium at 95%)
-  student-t 99%:          3986    (+57% fat-tail premium at 99%)
-
----
+-----
 
 ## Authentication & RBAC
 
 All write endpoints require an `X-API-Key` header. Read endpoints are open.
 
-### Roles
+|Role    |Permissions                                                 |
+|--------|------------------------------------------------------------|
+|admin   |Full access: ingest, match, compliance rules, key management|
+|trader  |Ingest + match + read                                       |
+|risk    |Manage compliance rules + read                              |
+|readonly|Read only                                                   |
 
-  admin     -- full access: ingest, match, compliance rules, read, key management
-  trader    -- ingest + match + read
-  risk      -- manage compliance rules + read
-  readonly  -- read only
+```bash
+# Create a key (admin only)
+curl -X POST http://0.0.0.0:9801/admin/api_keys \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"trader-desk","role":"trader","key":"my-trader-key"}'
 
-### Bootstrap
+# Create a key with expiry
+curl -X POST http://0.0.0.0:9801/admin/api_keys \
+  -H "X-API-Key: my-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"temp-key","role":"readonly","key":"temp-secret","expiry_ts":1778000000}'
 
-Set `QASIM_ADMIN_KEY_HASH` at startup (SHA256 of `apikey:<your-key>`):
+# Revoke a key
+curl -X DELETE http://0.0.0.0:9801/admin/api_keys/<key_hash> \
+  -H "X-API-Key: my-dev-key"
 
-  export ADMIN_KEY="$(openssl rand -hex 32)"
-  export QASIM_ADMIN_KEY_HASH="$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')"
-  fardrun run --program main.fard --out /tmp/qasim
+# List all keys
+curl http://0.0.0.0:9801/admin/api_keys \
+  -H "X-API-Key: my-dev-key"
+```
 
-The raw key is never stored — only its SHA256 hash.
+Raw keys are never stored — only `SHA256("apikey:<key>")`. Expired or revoked keys return `403` immediately.
 
-### Key Management
-
-  POST /admin/api_keys    -- create a key (admin only)
-  GET  /admin/api_keys    -- list all keys (admin only)
-
-  curl -X POST /admin/api_keys \
-    -H "X-API-Key: <admin-key>" \
-    -d '{"label":"trader-desk","role":"trader","key":"<key-value>"}'
-
-### Endpoint Permissions
-
-  /finance/ingest/*          -- write  (admin, trader)
-  /finance/match             -- match  (admin, trader)
-  /finance/pretrade          -- write  (admin, trader)
-  /finance/ingest/compliance_rule -- manage_rules (admin, risk)
-  /finance/position/*        -- open   (no auth required)
-  /finance/compliance/*      -- open
-  /finance/attribution/*     -- open
-  /finance/private/nav/*     -- open
-
-### Helm Deployment with RBAC
-
-  ADMIN_KEY="$(openssl rand -hex 32)"
-  ADMIN_HASH="$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')"
-  helm install qasim ./helm/qasim \
-    --set secret.chainSecretHex=$(openssl rand -hex 32) \
-    --set secret.adminKeyHash="${ADMIN_HASH}"
-
----
-
-## API Documentation
-
-The full OpenAPI 3.0 spec is at `docs/openapi.yaml`.
-
-View interactively in Swagger UI:
-
-  docker run -p 8080:8080 \
-    -e SWAGGER_JSON=/docs/openapi.yaml \
-    -v $(pwd)/docs:/docs \
-    swaggerapi/swagger-ui
-
-  open http://localhost:8080
-
-Or paste the raw file into https://editor.swagger.io
-
----
-
-## Liquidity Forecasting
-
-GET /finance/liquidity/<account> projects net cash position over 30/90/365-day
-horizons by combining all forward-looking cash obligations and receipts:
-
-  current_cash:              3500000
-  current_initial_margin:    883750    -- futures margin posted
-  current_variation_margin:  175000    -- MTM gain receivable
-  margin_buffer:             2616250   -- cash above margin requirement
-  liquidity_score:           100       -- 0-100 (penalizes shortfalls)
-  warnings:                  []        -- actionable alerts
-
-  projected: {
-    days_30: {
-      capital_calls:         0,        -- private market draws due
-      distributions:         0,        -- private market receipts
-      fees:                  0,
-      bond_coupons:          4500,     -- coupon income from FI positions
-      futures_margin_stress: 176750,   -- 20% adverse margin scenario
-      net_cash_flow:         4500,
-      projected_cash:        3504500,
-      margin_buffer:         3327750,
-      flow_count:            0
-    },
-    days_90:  { ... },
-    days_365: { ... }
-  }
-
-Warnings fire when:
-  - Capital call due within 30 days
-  - Projected cash falls below initial margin requirement
-  - Negative margin buffer projected within 90 days
-  - Annual capital calls exceed 50% of current cash
-
-liquidity_score deductions:
-  -30  cash below initial margin
-  -40  projected 30-day cash negative
-  -20  30-day capital calls > 30% of cash
-  -10  90-day margin buffer negative
-
----
+-----
 
 ## Audit Export
 
-GET /finance/audit/export/<account> returns a single tamper-evident bundle
-suitable for auditors, regulators, and Big-4 review:
+`GET /finance/audit/export/<account>` returns a single tamper-evident bundle combining position, compliance, attribution, and all 10 stress scenarios:
 
-  {
-    account, as_of_ts,
-    verified:             true,          -- all Ed25519 signatures valid
-    verification_digest:  "sha256:...",  -- hash of verification_summary
-    positions:            [...],         -- full position snapshot (all asset classes)
-    cash_balance:         500000,
-    public_nav:           507192,
-    private_nav:          { nav, pv_distributions, pv_capital_calls, ... },
-    futures:              { total_notional, total_mtm_pnl, total_variation_margin, ... },
-    ir_risk:              { fi_count, total_dv01 },
-    total_nav:            933263,        -- unified NAV across all asset classes
-    risk_snapshot:        { ... },       -- all 6 VaR methods, Greeks, futures, IR
-    compliance_report:    { rule_count, compliance: { passed, results, breaches } },
-    attribution:          { ... },       -- FIFO P&L, cost basis, return per position
-    stress_scenarios:     [ ... ],       -- 10 named scenarios with before/after deltas
-    receipt_chain_digest: "sha256:...",  -- latest chain link
-    fill_count, cash_count, price_count,
-    audit_digest:         "sha256:..."   -- SHA256 of entire bundle
+```json
+{
+  "account": "ACCT-123",
+  "as_of_ts": 1775676905,
+  "verified": true,
+  "verification_digest": "sha256:...",
+  "positions": [...],
+  "cash_balance": 500000,
+  "public_nav": 507192,
+  "private_nav": { "nav": 482395, "pv_capital_calls": 461558, "..." : "..." },
+  "futures": { "total_notional": 17675000, "total_mtm_pnl": 175000, "...": "..." },
+  "ir_risk": { "fi_count": 1, "total_dv01": -524.21 },
+  "total_nav": 933263,
+  "risk_snapshot": { "portfolio_var_95": 12.4, "portfolio_mc_t_var_95": 2211, "...": "..." },
+  "compliance_report": { "rule_count": 3, "compliance": { "passed": true, "...": "..." } },
+  "attribution": { "...": "..." },
+  "stress_scenarios": [ { "scenario": "gfc_2008", "pnl": -34600, "...": "..." } ],
+  "receipt_chain_digest": "sha256:...",
+  "audit_digest": "sha256:..."
+}
+```
+
+`audit_digest = SHA256(json.encode(bundle))`. Any field alteration invalidates it. Independent auditors can recompute from the replay package at `/finance/export/<account>`.
+
+-----
+
+## Liquidity Forecasting
+
+`GET /finance/liquidity/<account>` projects net cash over 30/90/365-day horizons from futures margins, private flows, and bond coupons.
+
+```json
+{
+  "current_cash": 3500000,
+  "current_initial_margin": 883750,
+  "margin_buffer": 2616250,
+  "liquidity_score": 100,
+  "warnings": [],
+  "projected": {
+    "days_30": {
+      "capital_calls": 0,
+      "distributions": 0,
+      "bond_coupons": 4500,
+      "futures_margin_stress": 176750,
+      "net_cash_flow": 4500,
+      "projected_cash": 3504500,
+      "margin_buffer": 3327750
+    }
   }
+}
+```
 
-audit_digest is computed as SHA256(json.encode(bundle)).
-Any alteration to any field — positions, NAV, compliance results, scenarios —
-invalidates audit_digest. Independent auditors can recompute it from raw data
-using the replay package (/finance/export/<account>).
+Warnings fire when: capital call due within 30 days; projected cash below initial margin; negative margin buffer in 90 days; annual capital calls exceed 50% of current cash.
 
-This endpoint combines the output of /finance/position, /finance/compliance,
-/finance/attribution, and all 10 stress scenarios into a single signed snapshot.
+`liquidity_score` deductions: -30 (cash below initial margin), -40 (30-day cash negative), -20 (30-day calls > 30% of cash), -10 (90-day buffer negative).
 
----
+-----
+
+## Scenario Analysis
+
+```bash
+GET /finance/scenario_at/<account>/<ts_unix>/<scenario>
+```
+
+Named scenarios: `equity_down_10`, `equity_up_10`, `market_crash_20`, `bull_case`, `sigma_2`, `sigma_3`, `sigma_4`, `sigma_4_t`, `gfc_2008`, `covid_crash`, `rates_shock`.
+
+Ad-hoc shock map: `AAPL:-0.2,MSFT:-0.1`
+
+```
+sigma_2:      -3.4%   (2 standard deviations, Gaussian)
+sigma_3:      -5.1%
+sigma_4:      -6.8%   (4 standard deviations, Gaussian)
+sigma_4_t:    -8.5%   (4 standard deviations, Student-t fat-tail)
+gfc_2008:     AAPL -57%, MSFT -44%, default -38%
+covid_crash:  AAPL -31%, MSFT -29%, default -34%
+rates_shock:  AAPL -18%, MSFT -15%, default -12%
+```
+
+Each scenario returns `shocked_positions`, `shocked_nav`, `pnl`, `summary`, and a `scenario_digest` (SHA256 of all inputs and outputs).
+
+-----
+
+## Endpoints
+
+### Write (POST) — requires X-API-Key
+
+```
+POST /finance/ingest/fill              Signed execution fill
+POST /finance/ingest/cash              Signed cash balance
+POST /finance/ingest/order             Signed order for matching
+POST /finance/ingest/instrument        Register instrument (equity, bond, option, future)
+POST /finance/ingest/corporate_action  Split, reverse split, or dividend
+POST /finance/ingest/compliance_rule   Signed compliance rule (admin/risk only)
+POST /finance/ingest/cash_flow         Signed private market cash flow
+POST /finance/ingest/batch             Array of signed objects (single chain link)
+POST /finance/price/claim              Signed price submission
+POST /finance/live/price               Fetch and sign a live price feed
+POST /finance/match                    Run price-time priority matching
+POST /finance/pretrade                 Pre-trade what-if + compliance delta
+```
+
+### Read (GET) — open
+
+```
+GET /finance/position/<account>                         Live position, NAV, risk, Greeks
+GET /finance/compliance/<account>                       Compliance against all active rules
+GET /finance/compliance_at/<account>/<ts_unix>          Time-indexed compliance
+GET /finance/liquidity/<account>                        30/90/365-day liquidity forecast
+GET /finance/audit/export/<account>                     Tamper-evident audit bundle
+GET /finance/attribution/<account>                      P&L, cost basis, return
+GET /finance/private/nav/<account>                      Private market DCF NAV
+GET /finance/orders/<instrument>                        Order book (open/partial/filled)
+GET /finance/scenario_at/<account>/<ts_unix>/<scenario> Scenario evaluation
+GET /finance/price/aggregate/<symbol>                   Multi-source price consensus
+GET /finance/export/<account>                           Full replay package
+GET /finance/export_at/<account>/<ts_unix>              Time-indexed replay package
+GET /finance/state_at/<account>/<ts_unix>               Time-indexed state
+GET /finance/chain/verify                               Receipt chain integrity
+GET /health                                             Server health
+```
+
+### Admin — requires admin key
+
+```
+POST   /admin/api_keys             Create API key
+GET    /admin/api_keys             List all keys
+DELETE /admin/api_keys/<key_hash>  Revoke key
+```
+
+-----
+
+## Receipt Chain
+
+Every request is recorded in an append-only log:
+
+```
+chain_digest_n = SHA256(chain_digest_{n-1}, req_digest, res_digest, state_digest)
+```
+
+Genesis: `"GENESIS"`. Response headers on every request:
+
+```
+X-Qasim-Chain-Digest       current chain head
+X-Qasim-Chain-Signature    Ed25519 signature over chain head
+X-Qasim-Chain-Public-Key   verifying public key
+X-Qasim-Request-Digest     SHA256 of canonical request
+X-Qasim-Response-Digest    SHA256 of canonical response
+```
+
+`GET /finance/chain/verify` recomputes every digest from stored pre-images and verifies linkage.
+
+-----
+
+## Architecture
+
+```
+main.fard
+  DB schema, ctx wiring, position cache (mutex), chain witnessing, net.serve
+
+packages/
+  qasim_http/       routing, all handlers, RBAC, liquidity, audit export
+  qasim_prices/     price loading, staleness, weighted consensus, median, trimmed mean
+  qasim_state/      positions, NAV, risk state, VaR (6 methods), Greeks, IR risk,
+                    futures MTM, compliance engine, DCF, Monte Carlo
+  qasim_scenarios/  scenario evaluation, 10 named scenarios
+  qasim_crypto/     Ed25519 chain signing
+  qasim_objects/    signed object constructors (fill, cash, order, bond, etc.)
+```
+
+All routing lives in `qasim_http`. `main.fard` wires dependencies into a `ctx` record and delegates every request to `qasim_http.handle(req, ctx)`.
+
+-----
+
+## Storage
+
+SQLite, all tables append-only via `INSERT OR IGNORE`:
+
+```
+fills           Signed fill records (source of position truth)
+cash_objects    Signed cash records
+orders          Signed order records
+price_claims    Signed multi-source price records
+object_store    Unified index by object type
+api_keys        RBAC keys (hash only, never raw)
+receipt_log     Append-only chain of request/response digests
+```
+
+Positions and NAV are computed from fills, not transactions. Corporate actions are stored in `object_store` with `object_type='corporate_action'`.
+
+-----
+
+## Test Suite
+
+```bash
+fardrun test --program tests/test_qasim_objects.fard          # 9 tests
+fardrun test --program tests/test_qasim_objects_model.fard    # 12 tests
+fardrun test --program tests/test_qasim_prices.fard           # 13 tests
+fardrun test --program tests/test_qasim_state.fard            # 11 tests
+fardrun test --program tests/test_qasim_greeks.fard           # 15 tests
+fardrun test --program tests/test_qasim_compliance.fard       # 21 tests
+fardrun test --program tests/test_qasim_risk.fard             # 11 tests
+fardrun test --program tests/test_qasim_private.fard          # 12 tests
+fardrun test --program tests/test_qasim_matching.fard         # 11 tests
+fardrun test --program tests/test_qasim_monte_carlo.fard      # 12 tests
+```
+
+117 tests, all passing.
+
+-----
+
+## API Documentation
+
+Full OpenAPI 3.0 spec at `docs/openapi.yaml`.
+
+```bash
+docker run -p 8080:8080 \
+  -e SWAGGER_JSON=/docs/openapi.yaml \
+  -v $(pwd)/docs:/docs \
+  swaggerapi/swagger-ui
+
+open http://localhost:8080
+```
+
+Or paste into https://editor.swagger.io
+
+-----
 
 ## Philosophy
 
