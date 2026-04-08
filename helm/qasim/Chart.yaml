@@ -1,0 +1,12 @@
+apiVersion: v2
+name: qasim
+description: Qasim — Cryptographically Anchored Financial State Engine in FARD
+type: application
+version: 0.1.0
+appVersion: "0.5.0"
+keywords:
+  - finance
+  - risk
+  - compliance
+  - verifiable
+home: https://github.com/mauludsadiq/Qasim-in-FARD

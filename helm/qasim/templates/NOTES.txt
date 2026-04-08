@@ -1,0 +1,14 @@
+Qasim has been deployed.
+
+Get the application URL:
+{{- if .Values.ingress.enabled }}
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ (first .Values.ingress.hosts).host }}/health
+{{- else }}
+  kubectl port-forward svc/{{ include "qasim.fullname" . }} 9801:9801
+  curl http://localhost:9801/health
+{{- end }}
+
+To run with a fresh chain secret:
+  kubectl create secret generic {{ include "qasim.fullname" . }}-secret \
+    --from-literal=chainSecretHex=$(openssl rand -hex 32) \
+    --dry-run=client -o yaml | kubectl apply -f -
