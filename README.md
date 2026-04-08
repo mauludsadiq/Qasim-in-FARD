@@ -326,6 +326,7 @@ Future-dated ts_unix values are rejected. URL-encoded path parameters are decode
   /finance/private/nav/<account>                   Private market DCF NAV
   /finance/orders/<instrument>                     View orders by instrument (open/partial/filled)
   /finance/audit/export/<account>                  One-click tamper-evident audit bundle
+  /finance/liquidity/<account>                     30/90/365-day liquidity forecast
   /finance/chain/verify                            Chain integrity check
   /health                                          Server health
 
@@ -829,6 +830,48 @@ View interactively in Swagger UI:
   open http://localhost:8080
 
 Or paste the raw file into https://editor.swagger.io
+
+---
+
+## Liquidity Forecasting
+
+GET /finance/liquidity/<account> projects net cash position over 30/90/365-day
+horizons by combining all forward-looking cash obligations and receipts:
+
+  current_cash:              3500000
+  current_initial_margin:    883750    -- futures margin posted
+  current_variation_margin:  175000    -- MTM gain receivable
+  margin_buffer:             2616250   -- cash above margin requirement
+  liquidity_score:           100       -- 0-100 (penalizes shortfalls)
+  warnings:                  []        -- actionable alerts
+
+  projected: {
+    days_30: {
+      capital_calls:         0,        -- private market draws due
+      distributions:         0,        -- private market receipts
+      fees:                  0,
+      bond_coupons:          4500,     -- coupon income from FI positions
+      futures_margin_stress: 176750,   -- 20% adverse margin scenario
+      net_cash_flow:         4500,
+      projected_cash:        3504500,
+      margin_buffer:         3327750,
+      flow_count:            0
+    },
+    days_90:  { ... },
+    days_365: { ... }
+  }
+
+Warnings fire when:
+  - Capital call due within 30 days
+  - Projected cash falls below initial margin requirement
+  - Negative margin buffer projected within 90 days
+  - Annual capital calls exceed 50% of current cash
+
+liquidity_score deductions:
+  -30  cash below initial margin
+  -40  projected 30-day cash negative
+  -20  30-day capital calls > 30% of cash
+  -10  90-day margin buffer negative
 
 ---
 
