@@ -300,23 +300,50 @@ fn match_qty(buy_order, sell_order) {
   if buy_remain < sell_remain then buy_remain else sell_remain
 }
 
+fn match_compliance_check(db, ctx, account, instrument, side, qty, price, now) {
+  let raw_fills = fill_rows_for_account(db, account) in
+  let raw_cash = cash_rows_for_account(db, account) in
+  let fills = filter_verified_rows(raw_fills, ctx) in
+  let cash = filter_verified_rows(raw_cash, ctx) in
+  let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
+  let all_prices = ctx.qasim_prices.all_price_rows(db) in
+  let inst_rows = instrument_rows(db) in
+  let ca_rows = corporate_action_rows(db) in
+  let rules = compliance_rule_rows(db, account) in
+  let current_positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+  let synthetic_fill = { digest: "match-synthetic", fill_id: "match", order_id: "match", account: account, instrument: instrument, side: side, qty: qty, price: price, ts_unix: now, issuer_pk_hex: "match", sig_b64: "match", payload_json: "{}" } in
+  let hypo_fills = list.append(fills, synthetic_fill) in
+  let hypo_positions = ctx.qasim_state.positions_from_fills_with_actions(hypo_fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+  let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
+  let trade_cost = if side == "buy" then qty * price else 0 - (qty * price) in
+  let current_risk = ctx.qasim_state.risk_state_with_var(current_positions, cash_balance, all_prices) in
+  let hypo_risk = ctx.qasim_state.risk_state_with_var(hypo_positions, cash_balance - trade_cost, all_prices) in
+  let current_compliance = ctx.qasim_state.evaluate_compliance(rules, current_positions, current_risk, now) in
+  let hypo_compliance = ctx.qasim_state.evaluate_compliance(rules, hypo_positions, hypo_risk, now) in
+  let new_breaches = list.filter(hypo_compliance.breaches, fn(hb) {
+    !rec.has(list.find(current_compliance.breaches, fn(cb) { cb.rule_id == hb.rule_id }), "some")
+  }) in
+  let new_hard = list.filter(new_breaches, fn(b) { b.severity == "hard" }) in
+  { blocked: list.len(new_hard) > 0, new_hard_breaches: list.len(new_hard), new_breaches: new_breaches }
+}
+
 fn run_matching_h(req, ctx) {
   let db = ctx.db in
   let body = json.decode(req.body) in
   let instrument = if rec.has(body, "instrument") then rec.get(body, "instrument") else "" in
   let issuer_pk_hex = if rec.has(body, "issuer_pk_hex") then rec.get(body, "issuer_pk_hex") else "SYSTEM" in
-  let issuer_secret_hex = if rec.has(body, "issuer_secret_hex") then rec.get(body, "issuer_secret_hex") else "" in
+  let compliance_mode = if rec.has(body, "compliance_mode") then rec.get(body, "compliance_mode") else "block_on_hard" in
   if instrument == "" then err_json_h(400, "missing instrument")
   else
     let now = current_ts(db) in
     let orders = open_orders_for_instrument(db, instrument) in
     let buys = list.filter(orders, fn(o) { o.side == "buy" }) in
     let sells = list.filter(orders, fn(o) { o.side == "sell" }) in
-    let result = list.fold(buys, { fills: [], updated_orders: [] }, fn(acc, buy) {
+    let result = list.fold(buys, { fills: [], blocked: [], updated_orders: [] }, fn(acc, buy) {
       let buy_remain = buy.qty - (if rec.has(buy, "filled_qty") then buy.filled_qty else 0) in
       if buy_remain <= 0 then acc
       else
-        let match_result = list.fold(sells, { fills: acc.fills, buy_filled: 0, buy_done: false }, fn(sacc, sell) {
+        let match_result = list.fold(sells, { fills: acc.fills, buy_filled: 0, buy_done: false, blocked: acc.blocked }, fn(sacc, sell) {
           if sacc.buy_done then sacc
           else
             let sell_remain = sell.qty - (if rec.has(sell, "filled_qty") then sell.filled_qty else 0) in
@@ -327,6 +354,11 @@ fn run_matching_h(req, ctx) {
               if qty <= 0 then sacc
               else
                 let price = match_price(buy, sell) in
+                let buy_check = if compliance_mode == "block_on_hard" then match_compliance_check(db, ctx, buy.account, instrument, "buy", qty, price, now) else { blocked: false, new_hard_breaches: 0, new_breaches: [] } in
+                let sell_check = if compliance_mode == "block_on_hard" then match_compliance_check(db, ctx, sell.account, instrument, "sell", qty, price, now) else { blocked: false, new_hard_breaches: 0, new_breaches: [] } in
+                if buy_check.blocked || sell_check.blocked then
+                  { fills: sacc.fills, buy_filled: sacc.buy_filled, buy_done: sacc.buy_done, blocked: list.append(sacc.blocked, { buy_order: buy.order_id, sell_order: sell.order_id, qty: qty, price: price, reason: "compliance_block", buy_breaches: buy_check.new_breaches, sell_breaches: sell_check.new_breaches }) }
+                else
                 let fill_id = str.concat(["FILL-", buy.order_id, "-", sell.order_id, "-", str.from(now)]) in
                 let buy_fill = {
                   fill_id: str.concat([fill_id, "-B"]),
@@ -377,16 +409,16 @@ fn run_matching_h(req, ctx) {
                 let _ = sqlite.exec(db, str.concat([
                   "UPDATE orders SET filled_qty=", str.from(new_sell_filled), ", status='", sell_status, "' WHERE order_id='", sell.order_id, "'"
                 ])) in
-                { fills: list.append(list.append(sacc.fills, buy_fill), sell_fill), buy_filled: sacc.buy_filled + qty, buy_done: sacc.buy_filled + qty >= buy_remain }
+                { fills: list.append(list.append(sacc.fills, buy_fill), sell_fill), buy_filled: sacc.buy_filled + qty, buy_done: sacc.buy_filled + qty >= buy_remain, blocked: sacc.blocked }
         }) in
         let new_buy_filled = (if rec.has(buy, "filled_qty") then buy.filled_qty else 0) + match_result.buy_filled in
         let buy_status = if new_buy_filled >= buy.qty then "filled" else if match_result.buy_filled > 0 then "partial" else "open" in
         let _ = if match_result.buy_filled > 0 then sqlite.exec(db, str.concat([
           "UPDATE orders SET filled_qty=", str.from(new_buy_filled), ", status='", buy_status, "' WHERE order_id='", buy.order_id, "'"
         ])) else null in
-        { fills: match_result.fills, updated_orders: acc.updated_orders }
+        { fills: match_result.fills, blocked: match_result.blocked, updated_orders: acc.updated_orders }
     }) in
-    ok_json_h({ instrument: instrument, as_of_ts: now, fills_generated: list.len(result.fills), fills: result.fills })
+    ok_json_h({ instrument: instrument, as_of_ts: now, compliance_mode: compliance_mode, fills_generated: list.len(result.fills), fills: result.fills, blocked_matches: list.len(result.blocked), blocked: result.blocked })
 }
 
 fn orders_h(req, ctx) {
