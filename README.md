@@ -22,100 +22,142 @@ and arrive at an identical result.
 
 ## Quickstart
 
-Generate a signing key and start the server:
-
   export QASIM_CHAIN_SECRET_HEX=$(openssl rand -hex 32)
-export QASIM_ADMIN_KEY_HASH=$(echo -n "apikey:my-dev-key" | sha256sum | awk '{print "sha256:"$1}')
+  export QASIM_ADMIN_KEY_HASH=$(echo -n "apikey:my-dev-key" | sha256sum | awk '{print "sha256:"$1}')
   fardrun run --program main.fard --out /tmp/qasim
 
-Server listens on http://0.0.0.0:9801
+Server listens on http://0.0.0.0:9801. Verify with:
 
   curl http://0.0.0.0:9801/health
-  {"status":"ok"}
+  → {"status":"ok"}
 
-QASIM_CHAIN_SECRET_HEX must be set before starting. The server fails fast if
-it is missing. Preserve the key across restarts — store it in a secrets manager
-for production use.
+Both env vars must be set before starting. QASIM_CHAIN_SECRET_HEX anchors the
+receipt chain — preserve it across restarts and store in a secrets manager for
+production. QASIM_ADMIN_KEY_HASH is the SHA256 of "apikey:<your-admin-key>"
+and bootstraps the RBAC system.
+
+Docker:
+  docker compose up
+
+Kubernetes (Helm):
+  ADMIN_KEY="$(openssl rand -hex 32)"
+  ADMIN_HASH="$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')"
+  helm install qasim ./helm/qasim \
+    --set secret.chainSecretHex=$(openssl rand -hex 32) \
+    --set secret.adminKeyHash="${ADMIN_HASH}"
 
 ---
 
 ## Walkthrough
 
-### 1. Register an instrument
+### 1. Create an API key (RBAC)
 
-  curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
+  # Bootstrap: your admin key is "my-dev-key" (set in QASIM_ADMIN_KEY_HASH at startup)
+  curl -X POST http://0.0.0.0:9801/admin/api_keys \
     -H "Content-Type: application/json" \
+    -H "X-API-Key: my-dev-key" \
+    -d '{"label":"trader-1","role":"trader","key":"trader-secret"}'
+
+  # All write endpoints now require -H "X-API-Key: <key>"
+  # Roles: admin | trader | risk | readonly
+
+### 2. Register instruments
+
+  # Equity
+  curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
     -d '{"payload_json":"{\"instrument_id\":\"AAPL\",\"asset_class\":\"equity\",\"symbol\":\"AAPL\",\"currency\":\"USD\",\"venue\":\"NASDAQ\",\"multiplier\":1,\"expiry_ts_unix\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
 
-  # Futures (E-mini S&P 500)
-  curl -X POST /finance/ingest/instrument -H "X-API-Key: <key>" \
-  -d '{"payload_json":"{\"instrument_id\":\"ESZ24\",\"asset_class\":\"future\",\"symbol\":\"ES\",\"currency\":\"USD\",\"venue\":\"CME\",\"multiplier\":50,\"expiry_ts_unix\":1778000000}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+  # Bond (UST 10Y: 4.5% coupon, semi-annual, YTM 4.75%)
+  curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d '{"payload_json":"{\"instrument_id\":\"UST10Y\",\"asset_class\":\"fixed_income\",\"symbol\":\"UST10Y\",\"currency\":\"USD\",\"venue\":\"OTC\",\"multiplier\":1000,\"expiry_ts_unix\":1778000000,\"coupon_rate\":0.045,\"face_value\":100,\"coupon_frequency\":2,\"ytm\":0.0475}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
 
-### 2. Ingest a fill
+  # Futures (E-mini S&P 500, contract size 50)
+  curl -X POST http://0.0.0.0:9801/finance/ingest/instrument \
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d '{"payload_json":"{\"instrument_id\":\"ESZ24\",\"asset_class\":\"future\",\"symbol\":\"ES\",\"currency\":\"USD\",\"venue\":\"CME\",\"multiplier\":50,\"expiry_ts_unix\":1778000000}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+
+### 3. Ingest cash and fills
+
+  NOW=$(date +%s)
+  curl -X POST http://0.0.0.0:9801/finance/ingest/cash \
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d "{\"payload_json\":\"{\\\"account\\\":\\\"ACCT-123\\\",\\\"currency\\\":\\\"USD\\\",\\\"amount\\\":500000,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
 
   curl -X POST http://0.0.0.0:9801/finance/ingest/fill \
-    -H "Content-Type: application/json" \
-    -d '{"payload_json":"{\"fill_id\":\"F1\",\"order_id\":\"O1\",\"account\":\"ACCT-123\",\"instrument\":\"AAPL\",\"side\":\"buy\",\"qty\":100,\"price\":170,\"ts_unix\":1731000100}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
-
-### 3. Ingest cash
-
-  curl -X POST http://0.0.0.0:9801/finance/ingest/cash \
-    -H "Content-Type: application/json" \
-    -d '{"payload_json":"{\"account\":\"ACCT-123\",\"currency\":\"USD\",\"amount\":50000,\"ts_unix\":1731000100}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d "{\"payload_json\":\"{\\\"fill_id\\\":\\\"F1\\\",\\\"order_id\\\":\\\"O1\\\",\\\"account\\\":\\\"ACCT-123\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"side\\\":\\\"buy\\\",\\\"qty\\\":100,\\\"price\\\":170,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
 
 ### 4. Submit price claims
 
   NOW=$(date +%s)
   curl -X POST http://0.0.0.0:9801/finance/price/claim \
-    -H "Content-Type: application/json" \
-    -d "{\"payload_json\":\"{\\\"symbol\\\":\\\"AAPL/USD\\\",\\\"mid\\\":172,\\\"venue\\\":\\\"NASDAQ\\\",\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d "{\"payload_json\":\"{\\\"symbol\\\":\\\"AAPL/USD\\\",\\\"mid\\\":172,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
 
-### 5. Submit a corporate action (2:1 split)
+### 5. Register compliance rules (admin/risk only)
 
-  curl -X POST http://0.0.0.0:9801/finance/ingest/corporate_action \
-    -H "Content-Type: application/json" \
-    -d "{\"payload_json\":\"{\\\"action_id\\\":\\\"CA-1\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"action_type\\\":\\\"split\\\",\\\"ex_ts_unix\\\":$NOW,\\\"effective_ts_unix\\\":$NOW,\\\"ratio_num\\\":2,\\\"ratio_den\\\":1,\\\"cash_amount\\\":0,\\\"currency\\\":\\\"USD\\\"}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
+  curl -X POST http://0.0.0.0:9801/finance/ingest/compliance_rule \
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d '{"payload_json":"{\"rule_id\":\"R1\",\"account\":\"ACCT-123\",\"rule_type\":\"max_position_size\",\"params\":{\"instrument\":\"AAPL\",\"max_value\":50000},\"severity\":\"hard\",\"effective_ts\":0,\"expiry_ts\":0}","issuer_pk_hex":"DEV","sig_b64":"DEV"}'
 
-### 6. Fetch a live price from Yahoo Finance
+### 6. Submit and match orders
 
   NOW=$(date +%s)
-  ISSUER_SECRET=$(openssl rand -hex 32)
-  curl -X POST http://0.0.0.0:9801/finance/live/price \
-    -H "Content-Type: application/json" \
-    -d "{"symbol":"AAPL/USD","venue":"NASDAQ",\
-        "url":"https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d",\
-        "feed_type":"yahoo","issuer_pk_hex":"DEV","issuer_secret_hex":"$ISSUER_SECRET"}"
-  Returns real market price with signed receipt and source_body_digest.
-
-### 7. Submit and match orders
-
   curl -X POST http://0.0.0.0:9801/finance/ingest/order \
-    -d '{"payload_json":"{\"order_id\":\"O-1\",\"account\":\"ACCT-A\",\"instrument\":\"AAPL\",\"side\":\"buy\",\"qty\":100,\"order_type\":\"limit\",\"limit_price\":175,\"ts_unix\":1731000000}","issuer_pk_hex":"pk","sig_b64":"sig"}'
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d "{\"payload_json\":\"{\\\"order_id\\\":\\\"O-BUY-1\\\",\\\"account\\\":\\\"ACCT-A\\\",\\\"instrument\\\":\\\"AAPL\\\",\\\"side\\\":\\\"buy\\\",\\\"qty\\\":100,\\\"order_type\\\":\\\"limit\\\",\\\"limit_price\\\":175,\\\"ts_unix\\\":$NOW}\",\"issuer_pk_hex\":\"DEV\",\"sig_b64\":\"DEV\"}"
 
+  # Run matching engine (compliance-gated)
   curl -X POST http://0.0.0.0:9801/finance/match \
-    -d '{"instrument":"AAPL","issuer_pk_hex":"SYSTEM"}'
+    -H "X-API-Key: my-dev-key" -H "Content-Type: application/json" \
+    -d '{"instrument":"AAPL","compliance_mode":"block_on_hard","issuer_pk_hex":"DEV"}'
+  → { fills_generated, fills, blocked_matches, blocked }
 
-  Returns fills_generated, fill details, prices. Fills appear in /finance/position.
-
-### 8. Query live position
+### 7. Query live position
 
   curl http://0.0.0.0:9801/finance/position/ACCT-123
 
-Response includes positions, cash_balance, nav, nav_usd, fx_rates, risk_state
-(with per-position and portfolio VaR), state_digest, and as_of_ts.
+  Response includes:
+    verified, verification_digest  -- Ed25519 signature validity
+    positions                      -- all asset classes with Greeks/DV01/MTM
+    public_nav, private_nav, total_nav
+    futures: { total_notional, total_mtm_pnl, total_variation_margin }
+    ir_risk: { total_dv01, portfolio_mod_duration }
+    risk_state: { portfolio_var_95, portfolio_mc_chol_var_95,
+                  portfolio_mc_t_var_95, portfolio_es_95, ... }
+    state_digest                   -- SHA256 of entire verified state
 
-### 9. Verify chain integrity
+### 8. Check compliance
+
+  curl http://0.0.0.0:9801/finance/compliance/ACCT-123
+  → { passed, results[{rule_id, rule_type, passed, severity, breach, suggested_action}],
+      breach_count, hard_breach_count, private_nav_dcf }
+
+### 9. Liquidity forecast
+
+  curl http://0.0.0.0:9801/finance/liquidity/ACCT-123
+  → { current_cash, margin_buffer, liquidity_score, warnings[],
+      projected: { days_30, days_90, days_365 } }
+
+### 10. Audit export
+
+  curl http://0.0.0.0:9801/finance/audit/export/ACCT-123
+  → single tamper-evident bundle with audit_digest
+    includes positions, risk, compliance, 10 stress scenarios, attribution
+    any field alteration invalidates audit_digest
+
+### 11. Verify chain integrity
 
   curl http://0.0.0.0:9801/finance/chain/verify
-  {"valid":true,"checked":12,"head":"sha256:..."}
+  → {"valid":true,"checked":12,"head":"sha256:..."}
 
-### 10. Export full replay package
+### 12. Export full replay package
 
   curl http://0.0.0.0:9801/finance/export/ACCT-123
-
-Returns all fills, cash, prices, positions, NAV, risk state, and state digest.
-Any party can replay this using POST /finance/replay and arrive at the same
-state_digest.
+  → all fills, cash, prices, positions, NAV, risk state, state_digest
+    any party can replay and arrive at identical state_digest
 
 ---
 
