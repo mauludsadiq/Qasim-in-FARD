@@ -757,6 +757,23 @@ The raw key is never stored — only its SHA256 hash.
 
 ---
 
+## API Documentation
+
+The full OpenAPI 3.0 spec is at `docs/openapi.yaml`.
+
+View interactively in Swagger UI:
+
+  docker run -p 8080:8080 \
+    -e SWAGGER_JSON=/docs/openapi.yaml \
+    -v $(pwd)/docs:/docs \
+    swaggerapi/swagger-ui
+
+  open http://localhost:8080
+
+Or paste the raw file into https://editor.swagger.io
+
+---
+
 ## Philosophy
 
 Qasim follows FARD principles:
