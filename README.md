@@ -22,36 +22,34 @@ and arrive at an identical result.
 
 ## Quickstart
 
-~~~bash
+```bash
+# 1. Clone the repo
+git clone https://github.com/mauludsadiq/Qasim-in-FARD.git
+cd Qasim-in-FARD
+
+# 2. Set secrets and start
 export QASIM_CHAIN_SECRET_HEX=$(openssl rand -hex 32)
-export QASIM_ADMIN_KEY_HASH=$(echo -n "apikey:my-dev-key" | sha256sum | awk '{print "sha256:"$1}')
+export QASIM_ADMIN_KEY_HASH=$(echo -n 'apikey:my-dev-key' | sha256sum | awk '{print "sha256:"$1}')
 fardrun run --program main.fard --out /tmp/qasim
-~~~
+```
 
-Server listens on http://0.0.0.0:9801. Verify with:
+Server listens on http://0.0.0.0:9801
 
-~~~bash
+```bash
 curl http://0.0.0.0:9801/health
-~~~
+```
 
-Both env vars must be set before starting. QASIM_CHAIN_SECRET_HEX anchors the
-receipt chain — preserve it across restarts and store in a secrets manager for
-production. QASIM_ADMIN_KEY_HASH is the SHA256 of "apikey:<your-admin-key>"
-and bootstraps the RBAC system.
+Your admin API key is `my-dev-key` (set via QASIM_ADMIN_KEY_HASH above).
+QASIM_CHAIN_SECRET_HEX anchors the receipt chain — preserve it across restarts.
 
-**Docker:**
-~~~bash
-docker compose up
-~~~
+**Docker:** `docker compose up`
 
 **Kubernetes:**
-~~~bash
-ADMIN_KEY="$(openssl rand -hex 32)"
-ADMIN_HASH="$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')"
-helm install qasim ./helm/qasim \
-  --set secret.chainSecretHex=$(openssl rand -hex 32) \
-  --set secret.adminKeyHash="${ADMIN_HASH}"
-~~~
+```bash
+ADMIN_KEY=$(openssl rand -hex 32)
+ADMIN_HASH=$(echo -n "apikey:${ADMIN_KEY}" | sha256sum | awk '{print "sha256:"$1}')
+helm install qasim ./helm/qasim --set secret.chainSecretHex=$(openssl rand -hex 32) --set secret.adminKeyHash="${ADMIN_HASH}"
+```
 
 ---
 
