@@ -1,0 +1,572 @@
+openapi: 3.0.3
+info:
+  title: Qasim in FARD
+  description: |
+    Cryptographically anchored financial risk & compliance engine.
+    All write endpoints require an `X-API-Key` header.
+    Read endpoints are open. Every response includes a `state_digest`
+    (SHA256 of the full state payload including verification signatures).
+  version: 0.5.0
+  contact:
+    url: https://github.com/mauludsadiq/Qasim-in-FARD
+
+servers:
+  - url: http://localhost:9801
+    description: Local development
+
+security: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+    VerificationSummary:
+      type: object
+      properties:
+        all_valid:
+          type: boolean
+        fills:
+          type: object
+        cash:
+          type: object
+
+    RiskState:
+      type: object
+      properties:
+        nav:                        { type: number }
+        gross_exposure:             { type: number }
+        net_exposure:               { type: number }
+        leverage:                   { type: number }
+        concentration:              { type: number }
+        portfolio_var_95:           { type: number }
+        portfolio_var_99:           { type: number }
+        portfolio_hvar_95:          { type: number }
+        portfolio_hvar_99:          { type: number }
+        portfolio_es_95:            { type: number }
+        portfolio_es_99:            { type: number }
+        portfolio_covar_var_95:     { type: number }
+        portfolio_covar_var_99:     { type: number }
+        portfolio_mc_var_95:        { type: number }
+        portfolio_mc_var_99:        { type: number }
+        portfolio_mc_chol_var_95:   { type: number }
+        portfolio_mc_chol_var_99:   { type: number }
+        portfolio_mc_t_var_95:      { type: number }
+        portfolio_mc_t_var_99:      { type: number }
+        mc_n_sims:                  { type: integer }
+        mc_seed:                    { type: integer }
+        mc_t_nu:                    { type: integer }
+        private_nav:                { type: number }
+        pv_capital_calls:           { type: number }
+
+    Position:
+      type: object
+      properties:
+        instrument:   { type: string }
+        qty:          { type: number }
+        price:        { type: number }
+        value:        { type: number }
+        asset_class:  { type: string }
+        greeks:
+          type: object
+          nullable: true
+          properties:
+            delta: { type: number }
+            gamma: { type: number }
+            vega:  { type: number }
+            theta: { type: number }
+            rho:   { type: number }
+
+    PrivateNav:
+      type: object
+      properties:
+        nav:              { type: number }
+        pv_distributions: { type: number }
+        pv_capital_calls: { type: number }
+        pv_fees:          { type: number }
+        flow_count:       { type: integer }
+        discount_rate:    { type: number }
+        as_of_ts:         { type: integer }
+
+    ComplianceResult:
+      type: object
+      properties:
+        rule_id:        { type: string }
+        rule_type:      { type: string }
+        passed:         { type: boolean }
+        severity:       { type: string, enum: [hard, warn, info] }
+        breach:         { type: string, nullable: true }
+        suggested_action: { type: string, nullable: true }
+
+    ComplianceReport:
+      type: object
+      properties:
+        passed:            { type: boolean }
+        results:           { type: array, items: { $ref: '#/components/schemas/ComplianceResult' } }
+        breach_count:      { type: integer }
+        hard_breach_count: { type: integer }
+        warning_count:     { type: integer }
+        breaches:          { type: array, items: { $ref: '#/components/schemas/ComplianceResult' } }
+        hard_breaches:     { type: array, items: { $ref: '#/components/schemas/ComplianceResult' } }
+
+    IngestRequest:
+      type: object
+      required: [payload_json, issuer_pk_hex, sig_b64]
+      properties:
+        payload_json:   { type: string, description: "JSON-encoded payload" }
+        issuer_pk_hex:  { type: string, description: "Ed25519 public key hex" }
+        sig_b64:        { type: string, description: "Ed25519 signature base64" }
+
+    ApiKey:
+      type: object
+      properties:
+        key_hash:   { type: string }
+        label:      { type: string }
+        role:       { type: string, enum: [admin, trader, risk, readonly] }
+        created_ts: { type: integer }
+        expiry_ts:  { type: integer }
+        active:     { type: integer }
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Server is healthy
+
+  /finance/position/{account}:
+    get:
+      summary: Live position, unified NAV, risk state, Greeks
+      parameters:
+        - name: account
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Position response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account:              { type: string }
+                  as_of_ts:             { type: integer }
+                  verified:             { type: boolean }
+                  verification_digest:  { type: string }
+                  verification_summary: { $ref: '#/components/schemas/VerificationSummary' }
+                  positions:            { type: array, items: { $ref: '#/components/schemas/Position' } }
+                  cash_balance:         { type: number }
+                  public_nav:           { type: number }
+                  public_nav_usd:       { type: number }
+                  private_nav:          { $ref: '#/components/schemas/PrivateNav' }
+                  total_nav:            { type: number }
+                  total_nav_usd:        { type: number }
+                  risk_state:           { $ref: '#/components/schemas/RiskState' }
+                  state_digest:         { type: string }
+                  meta:
+                    type: object
+                    properties:
+                      fill_count:  { type: integer }
+                      cash_count:  { type: integer }
+                      price_count: { type: integer }
+
+  /finance/compliance/{account}:
+    get:
+      summary: Compliance check against all active rules
+      parameters:
+        - name: account
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Compliance response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account:         { type: string }
+                  as_of_ts:        { type: integer }
+                  rule_count:      { type: integer }
+                  private_nav_dcf: { type: number }
+                  compliance:      { $ref: '#/components/schemas/ComplianceReport' }
+                  verification_summary: { $ref: '#/components/schemas/VerificationSummary' }
+
+  /finance/compliance_at/{account}/{ts_unix}:
+    get:
+      summary: Time-indexed compliance check
+      parameters:
+        - name: account
+          in: path
+          required: true
+          schema: { type: string }
+        - name: ts_unix
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Time-indexed compliance
+
+  /finance/pretrade:
+    post:
+      summary: Pre-trade what-if + compliance delta
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account, instrument, side, qty, price]
+              properties:
+                account:         { type: string }
+                instrument:      { type: string }
+                side:            { type: string, enum: [buy, sell] }
+                qty:             { type: number }
+                price:           { type: number }
+                compliance_mode: { type: string, enum: [block_on_hard, warn], default: block_on_hard }
+      responses:
+        '200':
+          description: Pre-trade analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current:            { type: object }
+                  hypothetical:       { type: object }
+                  delta:              { type: object }
+                  current_compliance: { $ref: '#/components/schemas/ComplianceReport' }
+                  hypo_compliance:    { $ref: '#/components/schemas/ComplianceReport' }
+                  compliance_delta:
+                    type: object
+                    properties:
+                      new_breaches:      { type: array }
+                      resolved_breaches: { type: array }
+                      new_hard_breaches: { type: integer }
+                      trade_blocked:     { type: boolean }
+                      compliance_mode:   { type: string }
+        '403':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /finance/match:
+    post:
+      summary: Run price-time priority matching for an instrument
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instrument]
+              properties:
+                instrument:      { type: string }
+                issuer_pk_hex:   { type: string }
+                compliance_mode: { type: string, enum: [block_on_hard, warn] }
+      responses:
+        '200':
+          description: Matching result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instrument:      { type: string }
+                  as_of_ts:        { type: integer }
+                  compliance_mode: { type: string }
+                  fills_generated: { type: integer }
+                  fills:           { type: array }
+                  blocked_matches: { type: integer }
+                  blocked:         { type: array }
+        '403':
+          description: Unauthorized
+
+  /finance/orders/{instrument}:
+    get:
+      summary: View order book for an instrument
+      parameters:
+        - name: instrument
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Order book
+
+  /finance/attribution/{account}:
+    get:
+      summary: Performance attribution — P&L, cost basis, return
+      parameters:
+        - name: account
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Attribution response
+
+  /finance/private/nav/{account}:
+    get:
+      summary: Private market DCF NAV
+      parameters:
+        - name: account
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Private NAV
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account:     { type: string }
+                  as_of_ts:    { type: integer }
+                  private_nav: { $ref: '#/components/schemas/PrivateNav' }
+
+  /finance/scenario_at/{account}/{ts_unix}/{scenario}:
+    get:
+      summary: Scenario analysis — apply named or ad-hoc shock
+      parameters:
+        - name: account
+          in: path
+          required: true
+          schema: { type: string }
+        - name: ts_unix
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: scenario
+          in: path
+          required: true
+          schema:
+            type: string
+            description: |
+              Named: equity_down_10, equity_up_10, market_crash_20,
+              tech_selloff, bull_case, sigma_2, sigma_3, sigma_4,
+              sigma_4_t, gfc_2008, covid_crash, rates_shock
+              Ad-hoc: AAPL:-0.2,MSFT:-0.1
+      responses:
+        '200':
+          description: Scenario result
+
+  /finance/price/aggregate/{symbol}:
+    get:
+      summary: Multi-source price consensus
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema: { type: string, example: "AAPL/USD" }
+      responses:
+        '200':
+          description: Price consensus
+
+  /finance/ingest/fill:
+    post:
+      summary: Ingest a signed execution fill
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: Fill ingested
+        '403':
+          description: Unauthorized
+
+  /finance/ingest/cash:
+    post:
+      summary: Ingest a signed cash balance
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: Cash ingested
+        '403':
+          description: Unauthorized
+
+  /finance/ingest/order:
+    post:
+      summary: Submit a signed order for matching
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: Order submitted
+        '403':
+          description: Unauthorized
+
+  /finance/ingest/instrument:
+    post:
+      summary: Register a signed instrument
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: Instrument registered
+        '403':
+          description: Unauthorized
+
+  /finance/ingest/compliance_rule:
+    post:
+      summary: Register a signed compliance rule (admin/risk only)
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: Rule registered
+        '403':
+          description: Unauthorized
+
+  /finance/ingest/cash_flow:
+    post:
+      summary: Ingest a signed private market cash flow
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: Cash flow ingested
+        '403':
+          description: Unauthorized
+
+  /finance/ingest/batch:
+    post:
+      summary: Batch ingest multiple signed objects (single chain link)
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: Batch ingested
+        '403':
+          description: Unauthorized
+
+  /finance/chain/verify:
+    get:
+      summary: Verify receipt chain integrity
+      responses:
+        '200':
+          description: Chain verification result
+
+  /admin/api_keys:
+    get:
+      summary: List all API keys (admin only)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Key list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:  { type: array, items: { $ref: '#/components/schemas/ApiKey' } }
+                  count: { type: integer }
+        '403':
+          description: Unauthorized
+    post:
+      summary: Create a new API key (admin only)
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label, role, key]
+              properties:
+                label:     { type: string }
+                role:      { type: string, enum: [admin, trader, risk, readonly] }
+                key:       { type: string, description: "Raw key value — only hash is stored" }
+                expiry_ts: { type: integer, description: "Unix timestamp. 0 = no expiry" }
+      responses:
+        '200':
+          description: Key created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKey' }
+        '403':
+          description: Unauthorized
+
+  /admin/api_keys/{key_hash}:
+    delete:
+      summary: Revoke an API key (admin only)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: key_hash
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Key revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:  { type: boolean }
+                  key_hash: { type: string }
+        '403':
+          description: Unauthorized
