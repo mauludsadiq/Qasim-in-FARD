@@ -309,7 +309,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let cached = if rec.has(cache, cache_key) then rec.get(cache, cache_key) else null
   let positions = if cached != null then cached
     else
-      let computed = state_mod.positions_from_fills_with_actions(fills, prices, prices_mod, inst_rows, ca_rows, null) in
+      let computed = state_mod.positions_from_fills_with_actions(fills, prices, prices_mod, inst_rows, ca_rows, now) in
       let new_cache = rec.set(cache, cache_key, computed) in
       let _ = mutex_mod.unlock(position_cache, new_cache) in
       computed
@@ -335,10 +335,27 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
     if p.notional == null then acc else acc + cast.float(p.notional)
   }) in
   let futures_summary = { count: list.len(futures_positions), total_notional: total_notional, total_mtm_pnl: total_mtm_pnl, total_variation_margin: total_variation_margin, total_initial_margin: total_initial_margin } in
+  let fi_positions = list.filter(positions, fn(p) { p.asset_class == "fixed_income" }) in
+  let total_dv01 = list.fold(fi_positions, 0.0, fn(acc, p) {
+    if p.ir_risk == null then acc else acc + p.ir_risk.dv01
+  }) in
+  let total_mod_duration = if list.len(fi_positions) == 0 then null else
+    let total_fi_value = list.fold(fi_positions, 0.0, fn(acc, p) {
+      if p.value == null then acc else acc + cast.float(p.value)
+    }) in
+    if total_fi_value == 0.0 then null
+    else
+      let weighted_dur = list.fold(fi_positions, 0.0, fn(acc, p) {
+        if p.ir_risk == null || p.value == null then acc
+        else acc + p.ir_risk.modified_duration * cast.float(p.value)
+      }) in
+      weighted_dur / total_fi_value
+  in
+  let ir_summary = { fi_count: list.len(fi_positions), total_dv01: total_dv01, portfolio_mod_duration: total_mod_duration } in
   let total_nav = public_nav + private_summary.nav + total_mtm_pnl in
   let total_nav_usd = nav_usd + private_summary.nav + total_mtm_pnl in
   let risk_with_private = rec.set(rec.set(rec.set(rec.set(risk_state_var, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls), "total_mtm_pnl", total_mtm_pnl), "total_initial_margin", total_initial_margin) in
-  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, positions: positions, cash_balance: state_mod.cash_balance_of(cash), public_nav: public_nav, public_nav_usd: nav_usd, private_nav: private_summary, futures: futures_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, dividend_cash: dividend_cash, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, meta: { fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count } })
+  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, positions: positions, cash_balance: state_mod.cash_balance_of(cash), public_nav: public_nav, public_nav_usd: nav_usd, private_nav: private_summary, futures: futures_summary, ir_risk: ir_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, dividend_cash: dividend_cash, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, meta: { fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count } })
 }
 
 
@@ -434,7 +451,7 @@ fn match_compliance_check(db, ctx, account, instrument, side, qty, price, now) {
   let inst_rows = instrument_rows(db) in
   let ca_rows = corporate_action_rows(db) in
   let rules = compliance_rule_rows(db, account) in
-  let current_positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+  let current_positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, now) in
   let synthetic_fill = { digest: "match-synthetic", fill_id: "match", order_id: "match", account: account, instrument: instrument, side: side, qty: qty, price: price, ts_unix: now, issuer_pk_hex: "match", sig_b64: "match", payload_json: "{}" } in
   let hypo_fills = list.append(fills, synthetic_fill) in
   let hypo_positions = ctx.qasim_state.positions_from_fills_with_actions(hypo_fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
@@ -611,7 +628,7 @@ fn compliance_check_h(req, ctx) {
     let cash = filter_verified_rows(raw_cash, ctx) in
     let vs = { fills: verify_rows(raw_fills, ctx), cash: verify_rows(raw_cash, ctx) } in
     let all_prices = ctx.qasim_prices.all_price_rows(db) in
-    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, now) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
     let base_risk = ctx.qasim_state.risk_state_with_var(positions, cash_balance, all_prices) in
     let flows = cash_flow_rows(db, account) in
@@ -660,7 +677,7 @@ fn attribution_h(req, ctx) {
     let fills = filter_verified_rows(raw_fills, ctx) in
     let cash = filter_verified_rows(raw_cash, ctx) in
     let vs = { fills: verify_rows(raw_fills, ctx), cash: verify_rows(raw_cash, ctx) } in
-    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, now) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
     let nav = ctx.qasim_state.nav_of(positions, cash_balance) in
     let total_cost = list.fold(fills, 0, fn(acc, r) {
@@ -715,7 +732,7 @@ fn pretrade_h(req, ctx) {
       sig_b64: "pretrade",
       payload_json: "{}"
     } in
-    let current_positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
+    let current_positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, now) in
     let hypo_fills = list.append(fills, synthetic_fill) in
     let hypo_positions = ctx.qasim_state.positions_from_fills_with_actions(hypo_fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in

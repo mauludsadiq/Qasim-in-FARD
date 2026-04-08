@@ -40,7 +40,7 @@ fn sigma_scenario(positions, price_rows, prices_mod, n_sigma) {
   let shocks = list.fold(positions, {}, fn(acc, p) {
     let sym = str.concat([p.instrument, "/USD"]) in
     let rows = list.filter(price_rows, fn(r) { r.symbol == sym }) in
-    let sorted = list.sort_by(rows, fn(a, b) { a.ts_unix - b.ts_unix }) in
+    let sorted = list.sort_by(rows, fn(a, b) { if a.ts_unix < b.ts_unix then 0 - 1 else if a.ts_unix > b.ts_unix then 1 else 0 }) in
     let n = list.len(sorted) in
     if n < 3 then acc
     else

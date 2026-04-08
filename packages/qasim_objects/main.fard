@@ -33,7 +33,31 @@ fn instrument(instrument_id, asset_class, symbol, currency, venue, multiplier, e
     strike: strike,
     implied_vol: implied_vol,
     option_type: option_type,
-    risk_free_rate: risk_free_rate
+    risk_free_rate: risk_free_rate,
+    coupon_rate: 0,
+    face_value: 100,
+    coupon_frequency: 2,
+    ytm: 0
+  }, issuer_pk_hex, sig_b64)
+}
+
+fn bond(instrument_id, symbol, currency, venue, multiplier, maturity_ts, coupon_rate, face_value, coupon_frequency, ytm, issuer_pk_hex, sig_b64) {
+  signed_object("instrument", {
+    instrument_id: instrument_id,
+    asset_class: "fixed_income",
+    symbol: symbol,
+    currency: currency,
+    venue: venue,
+    multiplier: multiplier,
+    expiry_ts_unix: maturity_ts,
+    strike: 0,
+    implied_vol: 0,
+    option_type: "none",
+    risk_free_rate: 0,
+    coupon_rate: coupon_rate,
+    face_value: face_value,
+    coupon_frequency: coupon_frequency,
+    ytm: ytm
   }, issuer_pk_hex, sig_b64)
 }
 
@@ -165,5 +189,6 @@ fn cash_flow(flow_id, asset_id, account, flow_type, amount, currency, expected_t
   portfolio: portfolio,
   collateral: collateral,
   compliance_rule: compliance_rule,
-  cash_flow: cash_flow
+  cash_flow: cash_flow,
+  bond: bond
 }
