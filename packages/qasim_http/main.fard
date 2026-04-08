@@ -208,7 +208,13 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let nav_usd = state_mod.nav_usd_of(positions, cash, fx_rates)
   let risk_state_var = state_mod.risk_state_with_var(positions, state_mod.cash_balance_of(cash), all_prices)
   let receipt = state_mod.state_receipt_verified(account, fills, cash, prices, positions, now, verification_summary)
-  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: state_mod.nav_of(positions, state_mod.cash_balance_of(cash)), nav_usd: nav_usd, fx_rates: fx_rates, risk_state: risk_state_var, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
+  let flows = cash_flow_rows(db, account) in
+  let private_summary = state_mod.private_nav_summary(flows, 0.08, now) in
+  let public_nav = state_mod.nav_of(positions, state_mod.cash_balance_of(cash)) in
+  let total_nav = public_nav + private_summary.nav in
+  let total_nav_usd = nav_usd + private_summary.nav in
+  let risk_with_private = rec.set(rec.set(risk_state_var, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls) in
+  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: public_nav, nav_usd: nav_usd, private_nav: private_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
 }
 
 
