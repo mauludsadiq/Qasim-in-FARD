@@ -191,10 +191,15 @@ fn lookup_role(db, key_hash, admin_key_hash) {
   if admin_key_hash != "" && key_hash == admin_key_hash then "admin"
   else
     let rows = sqlite.query(db, str.concat([
-      "SELECT role FROM api_keys WHERE key_hash='", key_hash, "' AND active=1"
+      "SELECT role, expiry_ts FROM api_keys WHERE key_hash='", key_hash, "' AND active=1"
     ])) in
     if list.len(rows) == 0 then ""
-    else rows[0].role
+    else
+      let row = rows[0] in
+      let expiry = if rec.has(row, "expiry_ts") then row.expiry_ts else 0 in
+      let now_ts = 9999999999 in
+      if expiry > 0 && expiry < now_ts then ""
+      else row.role
 }
 
 fn role_can_write(role) { role == "admin" || role == "trader" }
@@ -223,6 +228,23 @@ fn auth_error(reason) {
   { status: 403, headers: { "Content-Type": "application/json" }, body: str.concat(["{\"error\":\"", reason, "\"}"]) }
 }
 
+fn revoke_api_key_h(req, ctx) {
+  let db = ctx.db in
+  let auth = check_auth(req, db, ctx, "write") in
+  if !auth.ok then auth_error(auth.reason)
+  else if auth.role != "admin" then auth_error("only admin can revoke API keys")
+  else
+    let prefix = "/admin/api_keys/" in
+    let key_hash = str.slice(req.path, str.len(prefix), str.len(req.path)) in
+    if key_hash == "" then err_json_h(400, "missing key_hash in path")
+    else
+      let _ = sqlite.exec(db, str.concat([
+        "UPDATE api_keys SET active=0 WHERE key_hash='", key_hash, "'"
+      ])) in
+      ok_json_h({ revoked: true, key_hash: key_hash })
+}
+
+
 fn create_api_key_h(req, ctx) {
   let db = ctx.db in
   let auth = check_auth(req, db, ctx, "write") in
@@ -244,7 +266,11 @@ fn create_api_key_h(req, ctx) {
         "INSERT OR REPLACE INTO api_keys (key_hash,label,role,created_ts,active) VALUES ('",
         key_hash, "','", label, "','", role, "',", str.from(now), ",1)"
       ])) in
-      ok_json_h({ label: label, role: role, key_hash: key_hash, created_ts: now })
+      let expiry_ts = if rec.has(body, "expiry_ts") then rec.get(body, "expiry_ts") else 0 in
+      let _ = sqlite.exec(db, str.concat([
+        "UPDATE api_keys SET active=CASE WHEN ", str.from(expiry_ts), ">0 AND ", str.from(expiry_ts), "<", str.from(now), " THEN 0 ELSE active END WHERE key_hash='", key_hash, "'"
+      ])) in
+      ok_json_h({ label: label, role: role, key_hash: key_hash, created_ts: now, expiry_ts: expiry_ts })
 }
 
 fn list_api_keys_h(req, ctx) {
@@ -1357,6 +1383,7 @@ fn handle(req, ctx) {
   if req.path == "/health" then health_h()
   else if req.path == "/admin/api_keys" && req.method == "POST" then (if req.body == "" then err_json_h(400, "request body required") else create_api_key_h(req, ctx))
   else if req.path == "/admin/api_keys" && req.method == "GET" then list_api_keys_h(req, ctx)
+  else if str.starts_with(req.path, "/admin/api_keys/") && req.method == "DELETE" then revoke_api_key_h(req, ctx)
   else if req.path == "/finance/match" then
     (let _auth = check_auth(req, ctx.db, ctx, "match") in
     if !_auth.ok then auth_error(_auth.reason)
