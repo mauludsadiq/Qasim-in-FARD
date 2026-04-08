@@ -214,7 +214,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let total_nav = public_nav + private_summary.nav in
   let total_nav_usd = nav_usd + private_summary.nav in
   let risk_with_private = rec.set(rec.set(risk_state_var, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls) in
-  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, dividend_cash: dividend_cash, positions: positions, cash_balance: state_mod.cash_balance_of(cash), nav: public_nav, nav_usd: nav_usd, private_nav: private_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count })
+  ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, positions: positions, cash_balance: state_mod.cash_balance_of(cash), public_nav: public_nav, public_nav_usd: nav_usd, private_nav: private_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, dividend_cash: dividend_cash, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, meta: { fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count } })
 }
 
 
@@ -494,7 +494,7 @@ fn compliance_check_h(req, ctx) {
     let private_summary = ctx.qasim_state.private_nav_summary(flows, 0.08, now) in
     let risk_state = rec.set(rec.set(base_risk, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls) in
     let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, now) in
-    ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), verification_summary: vs, private_nav: private_summary.nav, compliance: compliance })
+    ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), verification_summary: vs, private_nav_dcf: private_summary.nav, compliance: compliance })
 }
 
 fn compliance_at_h(req, ctx) {
@@ -550,7 +550,6 @@ fn attribution_h(req, ctx) {
       verification_summary: vs,
       current_nav: nav,
       cash_balance: cash_balance,
-      beginning_nav: beginning_nav,
       attribution: attribution
     })
 }
