@@ -2,3 +2,5 @@ fard_src/*
 !fard_src/.gitkeep
 *.bak
 receipts/*.json
+.DS_Store
+**/.DS_Store
