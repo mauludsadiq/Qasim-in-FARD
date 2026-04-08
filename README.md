@@ -216,6 +216,10 @@ Correlation-aware VaR — full covariance matrix (Markowitz):
   Uses pairwise return covariances, aligned to 252-day common window.
   Shows diversification benefit vs additive VaR.
 
+Monte Carlo VaR — deterministic simulation (pure-FARD LCG + Box-Muller):
+  1000 scenarios, fixed seed=42, fully reproducible across runs
+  portfolio_mc_var_95/99, mc_n_sims, mc_seed in every risk_state response
+
 Exposures are delta-adjusted for options (unit_delta x spot x qty x multiplier).
 
 ---
@@ -234,7 +238,9 @@ Exposures are delta-adjusted for options (unit_delta x spot x qty x multiplier).
   /finance/live/price               Fetch and sign a live price feed
   /finance/ingest/compliance_rule   Register a signed compliance rule
   /finance/ingest/cash_flow         Register a signed private market cash flow
+  /finance/ingest/order             Submit a signed order for matching
   /finance/ingest/batch             Ingest array of signed objects (single chain link)
+  /finance/match                    Run price-time priority matching for an instrument
   /finance/replay                   Replay state from supplied data
 
 All mutating endpoints require a non-empty body. Ed25519 signatures are verified
@@ -255,6 +261,7 @@ Future-dated ts_unix values are rejected. URL-encoded path parameters are decode
   /finance/compliance_at/<account>/<ts_unix>       Time-indexed compliance check
   /finance/pretrade                                Pre-trade what-if + compliance delta
   /finance/private/nav/<account>                   Private market DCF NAV
+  /finance/orders/<instrument>                     View orders by instrument (open/partial/filled)
   /finance/chain/verify                            Chain integrity check
   /health                                          Server health
 
@@ -418,11 +425,10 @@ Corporate actions are stored in object_store with object_type='corporate_action'
 
 ## Future Extensions
 
-- Monte Carlo VaR (fixed-seed deterministic)
-- Matching and clearing engine
 - Integrations (Bloomberg, custodians, exchanges)
-- XBRL / regulatory export formats
+- XBRL / regulatory export formats with embedded digests
 - Helm chart for Kubernetes deployment
+- Correlation-aware Monte Carlo (Cholesky decomposition)
 
 ---
 
@@ -593,6 +599,54 @@ Illiquidity compliance rules:
   max_capital_call_exposure {max_value} -- PV unfunded commitments limit
 
 These rules are evaluated in /finance/compliance using live DCF NAV.
+
+---
+
+## Matching Engine
+
+POST /finance/match runs price-time priority (FIFO) matching for an instrument:
+
+  { "instrument": "AAPL", "issuer_pk_hex": "DEV" }
+
+Matching rules:
+- Limit orders match when buy_limit >= sell_limit
+- Market orders match against any resting order
+- Match price = resting (maker) order price
+- Partial fills supported — order status: open | partial | filled
+- Both buy and sell fills written as signed objects to fills + object_store
+
+GET /finance/orders/<instrument> returns order book with fill status:
+
+  orders: [{
+    order_id:   "O-BUY-1",
+    account:    "ACCT-A",
+    side:       "buy",
+    qty:        100,
+    limit_price: 175,
+    filled_qty: 60,
+    status:     "partial"
+  }]
+
+Network test: buy 100 @ 175 vs sell 60 @ 173 → 2 fills at 173, qty=60.
+Buy order remains partial (40 unfilled). Fills appear in /finance/position.
+
+---
+
+## Monte Carlo VaR
+
+Deterministic simulation using a pure-FARD LCG (no external PRNG):
+
+  lcg_next(state) = |state * 6364136223846793005 + 1442695040888963407|
+  Box-Muller transform: N(0,1) from two uniform draws
+
+mc_portfolio_var(positions, price_rows, n_sims=1000, seed=42):
+- Generates n_sims portfolio P&L scenarios
+- Each scenario: sum of position_value * vol * normal_draw per position
+- Sorts P&L, 5th/1st percentile = mc_var_95/99
+- Fully reproducible: same seed always produces identical results
+
+Appears in risk_state as portfolio_mc_var_95, portfolio_mc_var_99,
+mc_n_sims (1000), mc_seed (42) — all auditable and replayable.
 
 ---
 
