@@ -327,12 +327,40 @@ No forward-looking data is ever used.
 
 Scenarios apply deterministic shocks to base state without modifying it.
 
-Instrument shock map:  AAPL:-0.2,MSFT:-0.1
-Named scenarios:       equity_down_10, equity_up_10, market_crash_20,
-                       tech_selloff, bull_case
+  GET /finance/scenario_at/<account>/<ts_unix>/<scenario>
 
-Each scenario returns shocked_positions, shocked_nav, pnl, and a
-scenario_digest — a canonical hash of all scenario inputs and outputs.
+Instrument shock map (ad hoc):  AAPL:-0.2,MSFT:-0.1
+Named scenarios:
+
+  Directional:    equity_down_10, equity_up_10, market_crash_20, bull_case
+  Single name:    tech_selloff, single_name_gap_down
+  Sigma shocks:   sigma_2, sigma_3, sigma_4, sigma_4_t
+  Historical:     gfc_2008, covid_crash, rates_shock
+
+Sigma shocks use fixed per-instrument volatility estimates:
+  sigma_2:    -3.4%   (2 standard deviations)
+  sigma_3:    -5.1%   (3 standard deviations)
+  sigma_4:    -6.8%   (4 standard deviations, Gaussian)
+  sigma_4_t:  -8.5%   (4 standard deviations, Student-t fat-tail adjusted)
+
+Historical crisis scenarios:
+  gfc_2008:     AAPL -57%, MSFT -44%, default -38%
+  covid_crash:  AAPL -31%, MSFT -29%, default -34%
+  rates_shock:  AAPL -18%, MSFT -15%, default -12%
+
+Each scenario returns:
+  shocked_positions  -- per-instrument shock, base/shocked price, pnl
+  shocked_nav        -- portfolio NAV after shock
+  pnl                -- total portfolio P&L
+  summary            -- { base_nav, shocked_nav, total_pnl, pnl_pct,
+                          max_single_loss, positions_shocked }
+  scenario_digest    -- SHA256 of all scenario inputs and outputs
+
+Stress test results (ACCT-123, illustrative):
+  sigma_4:    -4.1%    (Gaussian 4-sigma)
+  sigma_4_t:  -5.2%    (fat-tail adjusted, +26% premium)
+  covid_crash: -18.8%
+  gfc_2008:   -34.6%   (binding tail constraint)
 
 ---
 
@@ -648,19 +676,32 @@ Buy order remains partial (40 unfilled). Fills appear in /finance/position.
 
 ## Monte Carlo VaR
 
-Deterministic simulation using a pure-FARD LCG (no external PRNG):
+Four VaR methods in every /finance/position response:
 
+  portfolio_mc_var_95/99         Gaussian independent (baseline)
+  portfolio_mc_chol_var_95/99    Gaussian Cholesky (correlated)
+  portfolio_mc_t_var_95/99       Student-t Cholesky (fat-tail, nu=4)
+  portfolio_covar_var_95/99      Analytic covariance (Markowitz)
+
+Pure-FARD LCG (no external PRNG, fully deterministic):
   lcg_next(state) = |state * 6364136223846793005 + 1442695040888963407|
-  Box-Muller transform: N(0,1) from two uniform draws
+  Box-Muller: N(0,1) from two uniform LCG draws
+  Student-t:  t = Z / sqrt(Chi2(nu)/nu), Chi2 via sum of nu squared normals
 
-mc_portfolio_var(positions, price_rows, n_sims=1000, seed=42):
-- Generates n_sims portfolio P&L scenarios
-- Each scenario: sum of position_value * vol * normal_draw per position
-- Sorts P&L, 5th/1st percentile = mc_var_95/99
-- Fully reproducible: same seed always produces identical results
+Cholesky decomposition (pure FARD matrix library):
+  build_cov_matrix: n x n covariance matrix from aligned 252-day returns
+  cholesky(Sigma, n): lower triangular L where Sigma = LL^T
+  Correlated draw: x = L * z where z ~ N(0,I) or t(nu)
 
-Appears in risk_state as portfolio_mc_var_95, portfolio_mc_var_99,
-mc_n_sims (1000), mc_seed (42) — all auditable and replayable.
+All methods: n_sims=1000, seed=42, fully reproducible and auditable.
+mc_t_nu=4 (standard for financial returns — heavier tails than Gaussian).
+
+Illustrative results (ACCT-123):
+  gaussian independent:    299    (uncorrelated, underestimates)
+  analytic covar:         1705    (correlation-aware)
+  gaussian cholesky:      1789    (MC correlated)
+  student-t cholesky:     2211    (+24% fat-tail premium at 95%)
+  student-t 99%:          3986    (+57% fat-tail premium at 99%)
 
 ---
 
