@@ -1,0 +1,66 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/str") as str
+import("std/cast") as cast
+import("../packages/qasim_state/main") as state
+
+fn make_buy(order_id, qty, limit_price, ts) {
+  { order_id: order_id, account: "ACCT-A", instrument: "AAPL", side: "buy", qty: qty, order_type: "limit", limit_price: limit_price, ts_unix: ts, filled_qty: 0, status: "open" }
+}
+
+fn make_sell(order_id, qty, limit_price, ts) {
+  { order_id: order_id, account: "ACCT-B", instrument: "AAPL", side: "sell", qty: qty, order_type: "limit", limit_price: limit_price, ts_unix: ts, filled_qty: 0, status: "open" }
+}
+
+fn make_market_buy(order_id, qty, ts) {
+  { order_id: order_id, account: "ACCT-A", instrument: "AAPL", side: "buy", qty: qty, order_type: "market", limit_price: 0, ts_unix: ts, filled_qty: 0, status: "open" }
+}
+
+fn can_match(buy, sell) {
+  let buy_limit = if rec.has(buy, "limit_price") then buy.limit_price else null in
+  let sell_limit = if rec.has(sell, "limit_price") then sell.limit_price else null in
+  let buy_type = if rec.has(buy, "order_type") then buy.order_type else "limit" in
+  let sell_type = if rec.has(sell, "order_type") then sell.order_type else "limit" in
+  if buy_type == "market" || sell_type == "market" then true
+  else if buy_limit == null || sell_limit == null then false
+  else buy_limit >= sell_limit
+}
+
+fn match_price(buy, sell) {
+  let buy_type = if rec.has(buy, "order_type") then buy.order_type else "limit" in
+  let sell_type = if rec.has(sell, "order_type") then sell.order_type else "limit" in
+  let buy_limit = if rec.has(buy, "limit_price") then buy.limit_price else 0 in
+  let sell_limit = if rec.has(sell, "limit_price") then sell.limit_price else 0 in
+  if sell_type == "limit" then sell_limit
+  else if buy_type == "limit" then buy_limit
+  else (buy_limit + sell_limit) / 2
+}
+
+fn match_qty(buy, sell) {
+  let buy_remain = buy.qty - buy.filled_qty in
+  let sell_remain = sell.qty - sell.filled_qty in
+  if buy_remain < sell_remain then buy_remain else sell_remain
+}
+
+let buy175 = make_buy("B1", 100, 175, 1000)
+let buy170 = make_buy("B2", 50, 170, 1001)
+let sell173 = make_sell("S1", 60, 173, 1000)
+let sell176 = make_sell("S2", 40, 176, 1001)
+let mkt_buy = make_market_buy("B3", 30, 1002)
+let partial_buy = make_buy("B4", 100, 175, 1000)
+let partial_sell = make_sell("S3", 40, 173, 1000)
+
+test "buy 175 matches sell 173" { can_match(buy175, sell173) }
+test "buy 170 does not match sell 173" { !can_match(buy170, sell173) }
+test "buy 175 does not match sell 176" { !can_match(buy175, sell176) }
+test "market buy matches any sell" { can_match(mkt_buy, sell176) }
+test "match price is maker sell price" { match_price(buy175, sell173) == 173 }
+test "match price for market buy is sell limit" { match_price(mkt_buy, sell173) == 173 }
+test "match qty is min of remaining" { match_qty(buy175, sell173) == 60 }
+test "match qty respects filled_qty" {
+  let partial = rec.set(buy175, "filled_qty", 80) in
+  match_qty(partial, sell173) == 20
+}
+test "partial fill qty correct" { match_qty(partial_buy, partial_sell) == 40 }
+test "sell 173 matches buy at exactly 173" { can_match(make_buy("X", 10, 173, 1000), sell173) }
+test "buy below sell does not match" { !can_match(make_buy("X", 10, 172, 1000), sell173) }

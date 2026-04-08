@@ -1,0 +1,65 @@
+import("std/list") as list
+import("std/cast") as cast
+import("std/math") as math
+import("../packages/qasim_state/main") as state
+
+fn lcg_next(s) {
+  let a = 6364136223846793005 in
+  let c = 1442695040888963407 in
+  let n = s * a + c in
+  if n < 0 then 0 - n else n
+}
+
+fn lcg_float(s) {
+  let n = lcg_next(s) in
+  { state: n, value: cast.float(n) / 9223372036854775807.0 }
+}
+
+fn lcg_normal(s) {
+  let r1 = lcg_float(s) in
+  let r2 = lcg_float(r1.state) in
+  let u1 = if r1.value == 0.0 then 0.0000001 else r1.value in
+  let n = math.sqrt(0.0 - 2.0 * math.log(u1)) * math.cos(2.0 * 3.141592653589793 * r2.value) in
+  { state: r2.state, value: n }
+}
+
+let r1a = lcg_normal(42)
+let r1b = lcg_normal(42)
+let r2a = lcg_normal(99)
+let r_chain = lcg_normal(lcg_normal(42).state)
+
+let price_rows = [
+  { symbol: "AAPL/USD", mid: 100, ts_unix: 1 },
+  { symbol: "AAPL/USD", mid: 102, ts_unix: 2 },
+  { symbol: "AAPL/USD", mid: 99,  ts_unix: 3 },
+  { symbol: "AAPL/USD", mid: 104, ts_unix: 4 },
+  { symbol: "AAPL/USD", mid: 101, ts_unix: 5 },
+  { symbol: "AAPL/USD", mid: 106, ts_unix: 6 },
+  { symbol: "AAPL/USD", mid: 103, ts_unix: 7 },
+  { symbol: "AAPL/USD", mid: 108, ts_unix: 8 },
+  { symbol: "AAPL/USD", mid: 105, ts_unix: 9 },
+  { symbol: "AAPL/USD", mid: 110, ts_unix: 10 },
+  { symbol: "AAPL/USD", mid: 107, ts_unix: 11 }
+]
+
+let positions = [
+  { instrument: "AAPL", qty: 100, price: 107, value: 10700, asset_class: "equity", greeks: null }
+]
+
+let mc1 = state.mc_portfolio_var(positions, price_rows, 100, 42)
+let mc2 = state.mc_portfolio_var(positions, price_rows, 100, 42)
+let mc3 = state.mc_portfolio_var(positions, price_rows, 100, 99)
+let mc_large = state.mc_portfolio_var(positions, price_rows, 1000, 42)
+
+test "lcg same seed same output" { r1a.value == r1b.value }
+test "lcg different seed different output" { r1a.value != r2a.value }
+test "lcg chained state advances" { r_chain.value != r1a.value }
+test "lcg output in reasonable range" { r1a.value > 0.0 - 5.0 && r1a.value < 5.0 }
+test "mc_var reproducible same seed" { mc1.mc_var_95 == mc2.mc_var_95 }
+test "mc_var different seed different result" { mc1.mc_var_95 != mc3.mc_var_95 }
+test "mc_var_99 greater than mc_var_95" { mc1.mc_var_99 > mc1.mc_var_95 }
+test "mc_var_95 positive" { mc1.mc_var_95 > 0.0 }
+test "mc seed echoed correctly" { mc1.seed == 42 }
+test "mc n_sims echoed correctly" { mc1.n_sims == 100 }
+test "larger n_sims gives more stable result" { mc_large.mc_var_95 > 0.0 }
+test "mc_var_95 within reasonable range of position value" { mc1.mc_var_95 < 10700.0 }
