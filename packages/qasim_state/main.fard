@@ -335,6 +335,58 @@ fn mc_cholesky_var(positions, price_rows, n_sims, seed) {
 }
 
 
+fn lcg_chi2(state, nu) {
+  let result = list.fold(list.range(0, nu), { state: state, sum: 0.0 }, fn(acc, _) {
+    let r = lcg_normal(acc.state) in
+    { state: r.state, sum: acc.sum + r.value * r.value }
+  }) in
+  { state: result.state, value: result.sum }
+}
+
+fn lcg_student_t(state, nu) {
+  let z = lcg_normal(state) in
+  let chi2 = lcg_chi2(z.state, nu) in
+  let denom = math.sqrt(chi2.value / cast.float(nu)) in
+  let t = if denom == 0.0 then 0.0 else z.value / denom in
+  { state: chi2.state, value: t }
+}
+
+fn mc_cholesky_t_var(positions, price_rows, n_sims, seed, nu) {
+  let n = list.len(positions) in
+  if n == 0 then { mc_var_95: 0.0, mc_var_99: 0.0, n_sims: n_sims, seed: seed, method: "cholesky_t", nu: nu }
+  else
+    let weights = list.map(positions, fn(p) {
+      cast.float(if p.value == null then 0 else p.value)
+    }) in
+    let cov_matrix = build_cov_matrix(positions, price_rows) in
+    let L = cholesky(cov_matrix, n) in
+    let sim_range = list.range(0, n_sims) in
+    let result = list.fold(sim_range, { state: seed, pnls: [] }, fn(acc, _) {
+      let z_result = list.fold(list.range(0, n), { state: acc.state, zs: [] }, fn(zacc, _) {
+        let r = lcg_student_t(zacc.state, nu) in
+        { state: r.state, zs: list.append(zacc.zs, r.value) }
+      }) in
+      let corr_result = list.fold(list.range(0, n), { pnl: 0.0 }, fn(cacc, i) {
+        let corr_i = list.fold(list.range(0, i + 1), 0.0, fn(s, j) {
+          s + matrix_get(L, i, j) * z_result.zs[j]
+        }) in
+        { pnl: cacc.pnl + weights[i] * corr_i }
+      }) in
+      { state: z_result.state, pnls: list.append(acc.pnls, corr_result.pnl) }
+    }) in
+    let sorted = list.sort_by(result.pnls, fn(a, b) {
+      if a < b then 0 - 1 else if a > b then 1 else 0
+    }) in
+    let idx_95 = n_sims * 5 / 100 in
+    let idx_99 = n_sims * 1 / 100 in
+    let loss_95 = sorted[if idx_95 < 1 then 1 else idx_95] in
+    let loss_99 = sorted[if idx_99 < 1 then 1 else idx_99] in
+    let mc_var_95 = if loss_95 < 0.0 then 0.0 - loss_95 else 0.0 in
+    let mc_var_99 = if loss_99 < 0.0 then 0.0 - loss_99 else 0.0 in
+    { mc_var_95: mc_var_95, mc_var_99: mc_var_99, n_sims: n_sims, seed: seed, method: "cholesky_t", nu: nu }
+}
+
+
 fn lcg_next(state) {
   let a = 6364136223846793005 in
   let c = 1442695040888963407 in
@@ -591,6 +643,7 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
   let covar_var_99 = portfolio_covar_var(positions, price_rows, 2.326)
   let mc_var = mc_portfolio_var(positions, price_rows, 1000, 42)
   let mc_chol = mc_cholesky_var(positions, price_rows, 1000, 42)
+  let mc_t = mc_cholesky_t_var(positions, price_rows, 1000, 42, 4)
   {
     nav: nav,
     cash_balance: cash_balance,
@@ -614,6 +667,9 @@ fn risk_state_with_var(positions, cash_balance, price_rows) {
     mc_seed: mc_var.seed,
     portfolio_mc_chol_var_95: mc_chol.mc_var_95,
     portfolio_mc_chol_var_99: mc_chol.mc_var_99,
+    portfolio_mc_t_var_95: mc_t.mc_var_95,
+    portfolio_mc_t_var_99: mc_t.mc_var_99,
+    mc_t_nu: mc_t.nu,
     positions: position_risk
   }
 }
@@ -1119,6 +1175,8 @@ fn positions_from_fills_with_actions(fill_rows, price_rows, prices_mod, inst_row
   position_greeks: position_greeks,
   mc_portfolio_var: mc_portfolio_var,
   mc_cholesky_var: mc_cholesky_var,
+  mc_cholesky_t_var: mc_cholesky_t_var,
+  lcg_student_t: lcg_student_t,
   cholesky: cholesky,
   build_cov_matrix: build_cov_matrix,
   lcg_normal: lcg_normal,
