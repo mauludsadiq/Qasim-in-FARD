@@ -354,7 +354,7 @@ fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position
   let ir_summary = { fi_count: list.len(fi_positions), total_dv01: total_dv01, portfolio_mod_duration: total_mod_duration } in
   let total_nav = public_nav + private_summary.nav + total_mtm_pnl in
   let total_nav_usd = nav_usd + private_summary.nav + total_mtm_pnl in
-  let risk_with_private = rec.set(rec.set(rec.set(rec.set(risk_state_var, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls), "total_mtm_pnl", total_mtm_pnl), "total_initial_margin", total_initial_margin) in
+  let risk_with_private = rec.set(rec.set(rec.set(rec.set(rec.set(risk_state_var, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls), "total_mtm_pnl", total_mtm_pnl), "total_initial_margin", total_initial_margin), "total_variation_margin", total_variation_margin) in
   ok_json({ account: account, as_of_ts: now, verified: receipt.verified, verification_digest: receipt.verification_digest, verification_summary: verification_summary, positions: positions, cash_balance: state_mod.cash_balance_of(cash), public_nav: public_nav, public_nav_usd: nav_usd, private_nav: private_summary, futures: futures_summary, ir_risk: ir_summary, total_nav: total_nav, total_nav_usd: total_nav_usd, dividend_cash: dividend_cash, fx_rates: fx_rates, risk_state: risk_with_private, state_digest: receipt.state_digest, meta: { fill_count: receipt.fill_count, cash_count: receipt.cash_count, price_count: receipt.price_count } })
 }
 
@@ -633,7 +633,10 @@ fn compliance_check_h(req, ctx) {
     let base_risk = ctx.qasim_state.risk_state_with_var(positions, cash_balance, all_prices) in
     let flows = cash_flow_rows(db, account) in
     let private_summary = ctx.qasim_state.private_nav_summary(flows, 0.08, now) in
-    let risk_state = rec.set(rec.set(base_risk, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls) in
+    let futures_pos = list.filter(positions, fn(p) { p.asset_class == "future" }) in
+    let total_var_margin = list.fold(futures_pos, 0.0, fn(acc, p) { if p.variation_margin == null then acc else acc + p.variation_margin }) in
+    let total_init_margin = list.fold(futures_pos, 0.0, fn(acc, p) { if p.initial_margin == null then acc else acc + p.initial_margin }) in
+    let risk_state = rec.set(rec.set(rec.set(rec.set(rec.set(base_risk, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls), "total_variation_margin", total_var_margin), "total_initial_margin", total_init_margin), "total_mtm_pnl", list.fold(futures_pos, 0.0, fn(acc, p) { if p.mtm_pnl == null then acc else acc + p.mtm_pnl })) in
     let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, now) in
     ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), verification_summary: vs, private_nav_dcf: private_summary.nav, compliance: compliance })
 }

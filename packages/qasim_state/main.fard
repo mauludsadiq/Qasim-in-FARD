@@ -1142,6 +1142,16 @@ fn check_rule(rule, positions, risk_state, as_of_ts) {
         str.concat(["PV capital call exposure ", str.from(v), " exceeds max ", str.from(max_value)]),
         str.concat(["reduce unfunded commitments to below ", str.from(max_value)]))
     else pass_result(rule_type)
+  else if rule_type == "max_margin_utilization" then
+    let max_pct = if rec.has(params, "max_pct") then params.max_pct else 100 in
+    let var_margin = if rec.has(risk_state, "total_variation_margin") then risk_state.total_variation_margin else 0.0 in
+    let init_margin = if rec.has(risk_state, "total_initial_margin") then risk_state.total_initial_margin else 0.0 in
+    let utilization = if init_margin == 0.0 then 0.0 else (var_margin / init_margin) * 100.0 in
+    if utilization > cast.float(max_pct) then
+      breach_result(rule_type, severity,
+        str.concat(["margin utilization ", str.from(utilization), "% exceeds max ", str.from(max_pct), "%"]),
+        str.concat(["reduce futures exposure or post additional margin -- utilization at ", str.from(utilization), "%"]))
+    else pass_result(rule_type)
   else
     pass_result(rule_type)
 }
