@@ -175,6 +175,89 @@ fn price_aggregate(req, db, prices_mod, ok_json) {
   ok_json(prices_mod.aggregate_symbol_prices(rows, symbol))
 }
 
+fn get_api_key(req) {
+  let headers = if rec.has(req, "headers") then req.headers else {} in
+  if rec.has(headers, "x-api-key") then rec.get(headers, "x-api-key")
+  else if rec.has(headers, "X-Api-Key") then rec.get(headers, "X-Api-Key")
+  else if rec.has(headers, "X-API-Key") then rec.get(headers, "X-API-Key")
+  else ""
+}
+
+fn hash_api_key(key) {
+  hash.sha256_text(str.concat(["apikey:", key]))
+}
+
+fn lookup_role(db, key_hash, admin_key_hash) {
+  if admin_key_hash != "" && key_hash == admin_key_hash then "admin"
+  else
+    let rows = sqlite.query(db, str.concat([
+      "SELECT role FROM api_keys WHERE key_hash='", key_hash, "' AND active=1"
+    ])) in
+    if list.len(rows) == 0 then ""
+    else rows[0].role
+}
+
+fn role_can_write(role) { role == "admin" || role == "trader" }
+fn role_can_match(role) { role == "admin" || role == "trader" }
+fn role_can_manage_rules(role) { role == "admin" || role == "risk" }
+fn role_can_read(role) { role == "admin" || role == "trader" || role == "risk" || role == "readonly" }
+
+fn check_auth(req, db, ctx, required_permission) {
+  let key = get_api_key(req) in
+  if key == "" then { ok: false, role: "", reason: "missing X-API-Key header" }
+  else
+    let key_hash = hash_api_key(key) in
+    let role = lookup_role(db, key_hash, ctx.admin_key_hash) in
+    if role == "" then { ok: false, role: "", reason: "invalid or inactive API key" }
+    else
+      let permitted = if required_permission == "write" then role_can_write(role)
+        else if required_permission == "match" then role_can_match(role)
+        else if required_permission == "manage_rules" then role_can_manage_rules(role)
+        else if required_permission == "read" then role_can_read(role)
+        else false in
+      if !permitted then { ok: false, role: role, reason: str.concat(["role '", role, "' cannot ", required_permission]) }
+      else { ok: true, role: role, reason: "" }
+}
+
+fn auth_error(reason) {
+  { status: 403, headers: { "Content-Type": "application/json" }, body: str.concat(["{\"error\":\"", reason, "\"}"]) }
+}
+
+fn create_api_key_h(req, ctx) {
+  let db = ctx.db in
+  let auth = check_auth(req, db, ctx, "write") in
+  if !auth.ok then auth_error(auth.reason)
+  else if auth.role != "admin" then auth_error("only admin can create API keys")
+  else
+    let body = json.decode(req.body) in
+    let label = if rec.has(body, "label") then rec.get(body, "label") else "" in
+    let role = if rec.has(body, "role") then rec.get(body, "role") else "" in
+    let key = if rec.has(body, "key") then rec.get(body, "key") else "" in
+    if label == "" then err_json_h(400, "missing label")
+    else if role == "" then err_json_h(400, "missing role")
+    else if key == "" then err_json_h(400, "missing key")
+    else if role != "admin" && role != "trader" && role != "risk" && role != "readonly" then err_json_h(400, "invalid role")
+    else
+      let key_hash = hash_api_key(key) in
+      let now = current_ts(db) in
+      let _ = sqlite.exec(db, str.concat([
+        "INSERT OR REPLACE INTO api_keys (key_hash,label,role,created_ts,active) VALUES ('",
+        key_hash, "','", label, "','", role, "',", str.from(now), ",1)"
+      ])) in
+      ok_json_h({ label: label, role: role, key_hash: key_hash, created_ts: now })
+}
+
+fn list_api_keys_h(req, ctx) {
+  let db = ctx.db in
+  let auth = check_auth(req, db, ctx, "write") in
+  if !auth.ok then auth_error(auth.reason)
+  else if auth.role != "admin" then auth_error("only admin can list API keys")
+  else
+    let rows = sqlite.query(db, "SELECT key_hash, label, role, created_ts, active FROM api_keys ORDER BY created_ts DESC") in
+    ok_json_h({ keys: rows, count: list.len(rows) })
+}
+
+
 fn get_position(req, db, prices_mod, state_mod, max_price_age, ok_json, position_cache, mutex_mod, ctx) {
   let prefix = "/finance/position/"
   let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path)))
@@ -1272,24 +1355,62 @@ fn verify_chain_h(ctx) {
 
 fn handle(req, ctx) {
   if req.path == "/health" then health_h()
-  else if req.path == "/finance/match" then (if req.body == "" then err_json_h(400, "request body required") else run_matching_h(req, ctx))
+  else if req.path == "/admin/api_keys" && req.method == "POST" then (if req.body == "" then err_json_h(400, "request body required") else create_api_key_h(req, ctx))
+  else if req.path == "/admin/api_keys" && req.method == "GET" then list_api_keys_h(req, ctx)
+  else if req.path == "/finance/match" then
+    (let _auth = check_auth(req, ctx.db, ctx, "match") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else run_matching_h(req, ctx))
   else if str.starts_with(req.path, "/finance/orders/") then orders_h(req, ctx)
-  else if req.path == "/finance/ingest/cash_flow" then (if req.body == "" then err_json_h(400, "request body required") else post_cash_flow_h(req, ctx))
+  else if req.path == "/finance/ingest/cash_flow" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_cash_flow_h(req, ctx))
   else if str.starts_with(req.path, "/finance/private/nav/") then private_nav_h(req, ctx)
-  else if req.path == "/finance/ingest/compliance_rule" then (if req.body == "" then err_json_h(400, "request body required") else post_compliance_rule_h(req, ctx))
-  else if req.path == "/finance/ingest/batch" then (if req.body == "" then err_json_h(400, "request body required") else post_batch_h(req, ctx))
-  else if req.path == "/finance/ingest/instrument" then (if req.body == "" then err_json_h(400, "request body required") else post_instrument_h(req, ctx))
+  else if req.path == "/finance/ingest/compliance_rule" then
+    (let _auth = check_auth(req, ctx.db, ctx, "manage_rules") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_compliance_rule_h(req, ctx))
+  else if req.path == "/finance/ingest/batch" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_batch_h(req, ctx))
+  else if req.path == "/finance/ingest/instrument" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_instrument_h(req, ctx))
   else if req.path == "/finance/ingest/corporate_action" then (if req.body == "" then err_json_h(400, "request body required") else post_corporate_action_h(req, ctx))
   else if req.path == "/finance/ingest/tx" then (if req.body == "" then err_json_h(400, "request body required") else post_tx_h(req, ctx))
-  else if req.path == "/finance/ingest/cash" then (if req.body == "" then err_json_h(400, "request body required") else post_cash_h(req, ctx))
-  else if req.path == "/finance/ingest/order" then (if req.body == "" then err_json_h(400, "request body required") else post_order_h(req, ctx))
-  else if req.path == "/finance/ingest/fill" then (if req.body == "" then err_json_h(400, "request body required") else post_fill_h(req, ctx))
+  else if req.path == "/finance/ingest/cash" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_cash_h(req, ctx))
+  else if req.path == "/finance/ingest/order" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_order_h(req, ctx))
+  else if req.path == "/finance/ingest/fill" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else post_fill_h(req, ctx))
   else if req.path == "/finance/price/claim" then (if req.body == "" then err_json_h(400, "request body required") else post_price_h(req, ctx))
   else if req.path == "/finance/live/price" then (if req.body == "" then err_json_h(400, "request body required") else post_live_price_h(req, ctx))
   else if str.starts_with(req.path, "/finance/compliance_at/") then compliance_at_h(req, ctx)
   else if str.starts_with(req.path, "/finance/compliance/") then compliance_check_h(req, ctx)
   else if str.starts_with(req.path, "/finance/attribution/") then attribution_h(req, ctx)
-  else if req.path == "/finance/pretrade" then (if req.body == "" then err_json_h(400, "request body required") else pretrade_h(req, ctx))
+  else if req.path == "/finance/pretrade" then
+    (let _auth = check_auth(req, ctx.db, ctx, "write") in
+    if !_auth.ok then auth_error(_auth.reason)
+    else if req.body == "" then err_json_h(400, "request body required")
+    else pretrade_h(req, ctx))
   else if req.path == "/finance/chain/verify" then verify_chain_h(ctx)
   else if req.path == "/finance/replay" then (if req.body == "" then err_json_h(400, "request body required") else replay(req, ctx.qasim_state, ok_json_h))
   else if str.starts_with(req.path, "/finance/price/aggregate/") then price_aggregate(req, ctx.db, ctx.qasim_prices, ok_json_h)

@@ -55,6 +55,14 @@ let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS price_claims (
 
 let _ = sqlite.exec(db, "CREATE INDEX IF NOT EXISTS idx_price_symbol_ts ON price_claims(symbol, ts_unix)")
 
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS api_keys (
+  key_hash TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  role TEXT NOT NULL,
+  created_ts INTEGER NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1
+)")
+
 let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS receipt_log (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   req_digest TEXT NOT NULL,
@@ -145,6 +153,7 @@ let ctx = {
   qasim_prices: qasim_prices,
   qasim_state: qasim_state,
   qasim_scenarios: qasim_scenarios,
+  admin_key_hash: (let ak = env.get("QASIM_ADMIN_KEY_HASH") in if rec.has(ak, "some") then ak.some else ""),
   qasim_objects: qasim_objects,
   crypto: crypto,
   hash: hash,
