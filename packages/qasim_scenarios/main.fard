@@ -1,3 +1,6 @@
+import("std/cast") as cast
+import("std/math") as math
+import("std/str") as str
 import("std/list") as list
 import("std/rec") as rec
 import("std/hash") as hash
@@ -10,7 +13,14 @@ fn scenario_library() {
     market_crash_20: { name: "market_crash_20", version: 1, shock_spec: { "_default": -0.2 } },
     tech_selloff: { name: "tech_selloff", version: 1, shock_spec: { "AAPL": -0.2, "MSFT": -0.15, "NVDA": -0.18, "_default": 0 } },
     single_name_gap_down: { name: "single_name_gap_down", version: 1, shock_spec: { "_default": 0 } },
-    bull_case: { name: "bull_case", version: 1, shock_spec: { "_default": 0.08 } }
+    bull_case: { name: "bull_case", version: 1, shock_spec: { "_default": 0.08 } },
+    sigma_2: { name: "sigma_2", version: 1, shock_spec: { "_default": -0.034 } },
+    sigma_3: { name: "sigma_3", version: 1, shock_spec: { "_default": -0.051 } },
+    sigma_4: { name: "sigma_4", version: 1, shock_spec: { "_default": -0.068 } },
+    sigma_4_t: { name: "sigma_4_t", version: 1, shock_spec: { "_default": -0.085 } },
+    gfc_2008: { name: "gfc_2008", version: 1, shock_spec: { "_default": -0.38, "AAPL": -0.57, "MSFT": -0.44 } },
+    covid_crash: { name: "covid_crash", version: 1, shock_spec: { "_default": -0.34, "AAPL": -0.31, "MSFT": -0.29 } },
+    rates_shock: { name: "rates_shock", version: 1, shock_spec: { "_default": -0.12, "AAPL": -0.18, "MSFT": -0.15 } }
   }
 }
 
@@ -24,6 +34,34 @@ fn resolve_scenario(spec_or_name) {
   if rec.has(spec_or_name, "scenario_name") then named_scenario(spec_or_name.scenario_name)
   else if rec.has(spec_or_name, "shock_spec") then spec_or_name
   else { name: "ad_hoc", version: 1, shock_spec: spec_or_name }
+}
+
+fn sigma_scenario(positions, price_rows, prices_mod, n_sigma) {
+  let shocks = list.fold(positions, {}, fn(acc, p) {
+    let sym = str.concat([p.instrument, "/USD"]) in
+    let rows = list.filter(price_rows, fn(r) { r.symbol == sym }) in
+    let sorted = list.sort_by(rows, fn(a, b) { a.ts_unix - b.ts_unix }) in
+    let n = list.len(sorted) in
+    if n < 3 then acc
+    else
+      let pairs = list.fold(sorted, { prev: null, rets: [] }, fn(racc, r) {
+        if racc.prev == null then { prev: r.mid, rets: [] }
+        else if racc.prev == 0 then { prev: r.mid, rets: racc.rets }
+        else
+          let ret = (cast.float(r.mid) - cast.float(racc.prev)) / cast.float(racc.prev) in
+          { prev: r.mid, rets: list.append(racc.rets, ret) }
+      }) in
+      let rets = pairs.rets in
+      let nr = list.len(rets) in
+      if nr < 2 then acc
+      else
+        let mean = list.fold(rets, 0.0, fn(s, x) { s + x }) / cast.float(nr) in
+        let variance = list.fold(rets, 0.0, fn(s, x) { s + (x - mean) * (x - mean) }) / cast.float(nr - 1) in
+        let vol = if variance <= 0.0 then 0.0 else math.sqrt(variance) in
+        let shock = 0.0 - vol * cast.float(n_sigma) in
+        rec.set(acc, p.instrument, shock)
+  }) in
+  { name: str.concat(["sigma_", str.from(n_sigma), "_dynamic"]), version: 1, shock_spec: shocks, n_sigma: n_sigma }
 }
 
 fn shock_for(instrument, shock_spec) {
@@ -58,6 +96,24 @@ fn scenario_nav_of(shocked_positions) {
   })
 }
 
+fn scenario_summary(base_nav, cash_balance, shocked_pos) {
+  let shocked_nav = scenario_nav_of(shocked_pos) + cash_balance in
+  let total_pnl = list.fold(shocked_pos, 0.0, fn(acc, p) {
+    if p.pnl == null then acc else acc + p.pnl
+  }) in
+  let max_loss = list.fold(shocked_pos, 0.0, fn(acc, p) {
+    if p.pnl == null then acc else if p.pnl < acc then p.pnl else acc
+  }) in
+  {
+    base_nav: base_nav,
+    shocked_nav: shocked_nav,
+    total_pnl: total_pnl,
+    pnl_pct: if base_nav == 0 then 0.0 else total_pnl / cast.float(base_nav) * 100.0,
+    max_single_loss: max_loss,
+    positions_shocked: list.len(list.filter(shocked_pos, fn(p) { p.shock != 0 }))
+  }
+}
+
 fn scenario_pnl_of(shocked_positions) {
   list.fold(shocked_positions, 0, fn(acc, p) {
     if p.pnl == null then acc else acc + p.pnl
@@ -72,6 +128,10 @@ fn scenario_state_of(account, as_of_ts, positions, scenario0, fallback_name) {
   let scenario_name = if rec.has(scenario, "name") then scenario.name else fallback_name
   let scenario_version = if rec.has(scenario, "version") then scenario.version else 1
   let shock_spec = scenario.shock_spec
+  let base_nav = list.fold(positions, 0.0, fn(acc, p) {
+    if p.value == null then acc else acc + cast.float(p.value)
+  })
+  let summary = scenario_summary(base_nav, 0, shocked)
   let payload = {
     account: account,
     as_of_ts: as_of_ts,
@@ -80,7 +140,8 @@ fn scenario_state_of(account, as_of_ts, positions, scenario0, fallback_name) {
     shock_spec: shock_spec,
     shocked_positions: shocked,
     shocked_nav: shocked_nav,
-    pnl: pnl
+    pnl: pnl,
+    summary: summary
   }
   {
     scenario: scenario_name,
@@ -89,6 +150,7 @@ fn scenario_state_of(account, as_of_ts, positions, scenario0, fallback_name) {
     shocked_positions: shocked,
     shocked_nav: shocked_nav,
     pnl: pnl,
+    summary: summary,
     scenario_digest: hash.sha256_text(json.encode(payload))
   }
 }
@@ -99,7 +161,12 @@ fn scenario_state_of(account, as_of_ts, positions, scenario0, fallback_name) {
   resolve_scenario: resolve_scenario,
   shock_for: shock_for,
   shocked_positions: shocked_positions,
+  sigma_scenario: sigma_scenario,
+  scenario_summary: scenario_summary,
   scenario_nav_of: scenario_nav_of,
   scenario_pnl_of: scenario_pnl_of,
-  scenario_state_of: scenario_state_of
+  scenario_state_of: scenario_state_of,
+  scenario_summary: scenario_summary,
+  sigma_scenario: sigma_scenario,
+  scenario_library: scenario_library
 }
