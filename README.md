@@ -429,7 +429,9 @@ Corporate actions are stored in object_store with object_type='corporate_action'
   fardrun test --program tests/test_qasim_compliance.fard     21 tests
   fardrun test --program tests/test_qasim_risk.fard           11 tests
   fardrun test --program tests/test_qasim_private.fard        12 tests
-  94 tests total, all passing
+  fardrun test --program tests/test_qasim_matching.fard       11 tests
+  fardrun test --program tests/test_qasim_monte_carlo.fard    12 tests
+  117 tests total, all passing
 
 ---
 
@@ -439,6 +441,7 @@ Corporate actions are stored in object_store with object_type='corporate_action'
 - XBRL / regulatory export formats with embedded digests
 - Helm chart for Kubernetes deployment
 - Correlation-aware Monte Carlo (Cholesky decomposition)
+- Stress testing with shocked covariance matrix and Greeks re-computation
 
 ---
 
