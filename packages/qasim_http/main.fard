@@ -73,16 +73,6 @@ fn fill_rows_for_account(db, account) {
   })
 }
 
-fn cash_flow_rows(db, account) {
-  list.map(
-    sqlite.query(db, str.concat([
-      "SELECT payload_json FROM object_store WHERE object_type='cash_flow' AND account='",
-      account, "'"
-    ])),
-    fn(r) { json.decode(r.payload_json) }
-  )
-}
-
 fn fill_rows_for_account_at(db, account, ts_unix_cutoff) {
   list.map(sqlite.query(db, str.concat([
     "SELECT digest,payload_json,issuer_pk_hex,sig_b64 FROM object_store WHERE object_type='fill' AND account='",
@@ -228,6 +218,119 @@ fn check_auth(req, db, ctx, required_permission) {
 fn auth_error(reason) {
   { status: 403, headers: { "Content-Type": "application/json" }, body: str.concat(["{\"error\":\"", reason, "\"}"]) }
 }
+
+fn project_liquidity(flows, positions, cash_balance, now, horizon_days) {
+  let horizon_ts = now + horizon_days * 86400 in
+  let future_flows = list.filter(flows, fn(f) {
+    f.expected_ts > now && f.expected_ts <= horizon_ts
+  }) in
+  let capital_calls = list.fold(future_flows, 0.0, fn(acc, f) {
+    if f.flow_type == "capital_call" then acc + cast.float(f.amount) else acc
+  }) in
+  let distributions = list.fold(future_flows, 0.0, fn(acc, f) {
+    if f.flow_type == "distribution" then acc + cast.float(f.amount) else acc
+  }) in
+  let fees = list.fold(future_flows, 0.0, fn(acc, f) {
+    if f.flow_type == "fee" then acc + cast.float(f.amount) else acc
+  }) in
+  let bond_coupons = list.fold(positions, 0.0, fn(acc, p) {
+    if p.asset_class != "fixed_income" then acc
+    else if p.ir_risk == null then acc
+    else
+      let annual_coupon = cast.float(p.qty) * cast.float(p.ir_risk.face_value) * cast.float(p.ir_risk.coupon_rate) * cast.float(p.value != null && p.value != 0) in
+      let period_coupon = annual_coupon * cast.float(horizon_days) / 365.0 in
+      acc + period_coupon
+  }) in
+  let futures_margin_stress = list.fold(positions, 0.0, fn(acc, p) {
+    if p.asset_class != "future" then acc
+    else if p.initial_margin == null then acc
+    else acc + cast.float(p.initial_margin) * 0.2
+  }) in
+  let net_flow = distributions - capital_calls - fees + bond_coupons in
+  let projected_cash = cast.float(cash_balance) + net_flow in
+  let margin_buffer = projected_cash - futures_margin_stress in
+  {
+    horizon_days: horizon_days,
+    capital_calls: capital_calls,
+    distributions: distributions,
+    fees: fees,
+    bond_coupons: bond_coupons,
+    futures_margin_stress: futures_margin_stress,
+    net_cash_flow: net_flow,
+    projected_cash: projected_cash,
+    margin_buffer: margin_buffer,
+    flow_count: list.len(future_flows)
+  }
+}
+
+fn liquidity_warnings(proj30, proj90, proj365, cash_balance, total_initial_margin) {
+  let warns = [] in
+  let w1 = if proj30.capital_calls > 0.0 then
+    list.append(warns, str.concat(["capital call of $", str.from(proj30.capital_calls), " due within 30 days"]))
+  else warns in
+  let w2 = if proj30.projected_cash < total_initial_margin then
+    list.append(w1, str.concat(["projected 30-day cash $", str.from(proj30.projected_cash), " below initial margin requirement $", str.from(total_initial_margin)]))
+  else w1 in
+  let w3 = if proj90.margin_buffer < 0.0 then
+    list.append(w2, str.concat(["negative margin buffer in 90 days: $", str.from(proj90.margin_buffer)]))
+  else w2 in
+  let w4 = if proj365.capital_calls > cast.float(cash_balance) * 0.5 then
+    list.append(w3, str.concat(["capital calls over next year ($", str.from(proj365.capital_calls), ") exceed 50% of current cash"]))
+  else w3 in
+  w4
+}
+
+fn liquidity_score(cash_balance, total_initial_margin, proj30, proj90) {
+  let score = 100 in
+  let s1 = if cast.float(cash_balance) < total_initial_margin then score - 30 else score in
+  let s2 = if proj30.projected_cash < 0.0 then s1 - 40 else s1 in
+  let s3 = if proj30.capital_calls > cast.float(cash_balance) * 0.3 then s2 - 20 else s2 in
+  let s4 = if proj90.margin_buffer < 0.0 then s3 - 10 else s3 in
+  if s4 < 0 then 0 else s4
+}
+
+fn liquidity_h(req, ctx) {
+  let db = ctx.db in
+  let prefix = "/finance/liquidity/" in
+  let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
+  if account == "" then err_json_h(400, "missing account")
+  else
+    let now = current_ts(db) in
+    let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
+    let inst_rows = instrument_rows(db) in
+    let ca_rows = corporate_action_rows(db) in
+    let raw_fills = fill_rows_for_account(db, account) in
+    let raw_cash = cash_rows_for_account(db, account) in
+    let fills = filter_verified_rows(raw_fills, ctx) in
+    let cash = filter_verified_rows(raw_cash, ctx) in
+    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, now) in
+    let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
+    let flows = cash_flow_rows(db, account) in
+    let futures_pos = list.filter(positions, fn(p) { p.asset_class == "future" }) in
+    let total_init_margin = list.fold(futures_pos, 0.0, fn(acc, p) { if p.initial_margin == null then acc else acc + p.initial_margin }) in
+    let total_var_margin = list.fold(futures_pos, 0.0, fn(acc, p) { if p.variation_margin == null then acc else acc + p.variation_margin }) in
+    let proj30 = project_liquidity(flows, positions, cash_balance, now, 30) in
+    let proj90 = project_liquidity(flows, positions, cash_balance, now, 90) in
+    let proj365 = project_liquidity(flows, positions, cash_balance, now, 365) in
+    let warnings = liquidity_warnings(proj30, proj90, proj365, cash_balance, total_init_margin) in
+    let score = liquidity_score(cash_balance, total_init_margin, proj30, proj90) in
+    ok_json_h({
+      account: account,
+      as_of_ts: now,
+      current_cash: cash_balance,
+      current_initial_margin: total_init_margin,
+      current_variation_margin: total_var_margin,
+      margin_buffer: cast.float(cash_balance) - total_init_margin,
+      liquidity_score: score,
+      warnings: warnings,
+      projected: {
+        days_30: proj30,
+        days_90: proj90,
+        days_365: proj365
+      }
+    })
+}
+
 
 fn audit_export_h(req, ctx) {
   let db = ctx.db in
@@ -1497,6 +1600,7 @@ fn handle(req, ctx) {
   else if req.path == "/admin/api_keys" && req.method == "GET" then list_api_keys_h(req, ctx)
   else if str.starts_with(req.path, "/admin/api_keys/") && req.method == "DELETE" then revoke_api_key_h(req, ctx)
   else if str.starts_with(req.path, "/finance/audit/export/") then audit_export_h(req, ctx)
+  else if str.starts_with(req.path, "/finance/liquidity/") then liquidity_h(req, ctx)
   else if req.path == "/finance/match" then
     (let _auth = check_auth(req, ctx.db, ctx, "match") in
     if !_auth.ok then auth_error(_auth.reason)
