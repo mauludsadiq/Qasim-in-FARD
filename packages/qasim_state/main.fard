@@ -771,6 +771,27 @@ fn check_rule(rule, positions, risk_state, as_of_ts) {
         str.concat(["portfolio ES 99% ", str.from(v), " exceeds max ", str.from(max_es)]),
         "reduce tail risk exposure")
     else pass_result(rule_type)
+  else if rule_type == "max_illiquid_pct" then
+    let max_pct = if rec.has(params, "max_pct") then params.max_pct else 100 in
+    let private_nav = if rec.has(risk_state, "private_nav") then risk_state.private_nav else 0.0 in
+    let pn = if private_nav == null then 0.0 else private_nav in
+    let pub_nav = if rec.has(risk_state, "nav") then cast.float(risk_state.nav) else 0.0 in
+    let total_nav = pub_nav + pn in
+    let illiquid_pct = if total_nav == 0.0 then 0.0 else (pn / total_nav) * 100.0 in
+    if illiquid_pct > cast.float(max_pct) then
+      breach_result(rule_type, severity,
+        str.concat(["illiquid allocation ", str.from(illiquid_pct), "% exceeds max ", str.from(max_pct), "%"]),
+        str.concat(["reduce private market exposure to below ", str.from(max_pct), "% of total NAV"]))
+    else pass_result(rule_type)
+  else if rule_type == "max_capital_call_exposure" then
+    let max_value = if rec.has(params, "max_value") then params.max_value else 0 in
+    let pv_calls = if rec.has(risk_state, "pv_capital_calls") then risk_state.pv_capital_calls else 0.0 in
+    let v = if pv_calls == null then 0.0 else pv_calls in
+    if v > cast.float(max_value) then
+      breach_result(rule_type, severity,
+        str.concat(["PV capital call exposure ", str.from(v), " exceeds max ", str.from(max_value)]),
+        str.concat(["reduce unfunded commitments to below ", str.from(max_value)]))
+    else pass_result(rule_type)
   else
     pass_result(rule_type)
 }

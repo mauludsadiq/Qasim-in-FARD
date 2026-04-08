@@ -314,9 +314,12 @@ fn compliance_check_h(req, ctx) {
     let all_prices = ctx.qasim_prices.all_price_rows(db) in
     let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, null) in
     let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
-    let risk_state = ctx.qasim_state.risk_state_with_var(positions, cash_balance, all_prices) in
+    let base_risk = ctx.qasim_state.risk_state_with_var(positions, cash_balance, all_prices) in
+    let flows = cash_flow_rows(db, account) in
+    let private_summary = ctx.qasim_state.private_nav_summary(flows, 0.08, now) in
+    let risk_state = rec.set(rec.set(base_risk, "private_nav", private_summary.nav), "pv_capital_calls", private_summary.pv_capital_calls) in
     let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, now) in
-    ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), verification_summary: vs, compliance: compliance })
+    ok_json_h({ account: account, as_of_ts: now, rule_count: list.len(rules), verification_summary: vs, private_nav: private_summary.nav, compliance: compliance })
 }
 
 fn compliance_at_h(req, ctx) {

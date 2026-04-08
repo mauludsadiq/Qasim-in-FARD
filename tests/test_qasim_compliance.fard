@@ -81,3 +81,21 @@ test "max_es_95 breaches when over limit" { !c14.passed }
 test "duplicate rule_ids deduplicated" { list.len(c_dedup.results) == 1 }
 test "hard breach count correct" { c2.hard_breach_count == 1 }
 test "warning count correct" { c4.warning_count == 1 }
+
+let risk_with_private = rec.set(rec.set(risk_state, "private_nav", 15000.0), "pv_capital_calls", 200000.0)
+let risk_with_small_private = rec.set(rec.set(risk_state, "private_nav", 1000.0), "pv_capital_calls", 100.0)
+
+let rule_illiquid = { rule_id: "IL1", rule_type: "max_illiquid_pct", params: { max_pct: 30 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_illiquid_breach = { rule_id: "IL2", rule_type: "max_illiquid_pct", params: { max_pct: 10 }, severity: "hard", effective_ts: 0, expiry_ts: 0 }
+let rule_capex = { rule_id: "CC1", rule_type: "max_capital_call_exposure", params: { max_value: 500000 }, severity: "warn", effective_ts: 0, expiry_ts: 0 }
+let rule_capex_breach = { rule_id: "CC2", rule_type: "max_capital_call_exposure", params: { max_value: 100000 }, severity: "warn", effective_ts: 0, expiry_ts: 0 }
+
+let c_il1 = state.evaluate_compliance([rule_illiquid], positions, risk_with_private, now)
+let c_il2 = state.evaluate_compliance([rule_illiquid_breach], positions, risk_with_private, now)
+let c_cc1 = state.evaluate_compliance([rule_capex], positions, risk_with_private, now)
+let c_cc2 = state.evaluate_compliance([rule_capex_breach], positions, risk_with_private, now)
+
+test "max_illiquid_pct passes when private is small" { c_il1.passed }
+test "max_illiquid_pct breaches when private exceeds limit" { !c_il2.passed }
+test "max_capital_call_exposure passes when under limit" { c_cc1.passed }
+test "max_capital_call_exposure breaches when over limit" { c_cc2.warning_count == 1 }
