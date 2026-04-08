@@ -732,7 +732,7 @@ fn historical_var_of(position_value, price_rows, symbol) {
 }
 
 fn position_historical_var(p, price_rows) {
-  if p.value == null then { hvar_95: null, hvar_99: null, n_returns: 0 }
+  if p.value == null then { hvar_95: null, hvar_99: null, es_95: null, es_99: null, n_returns: 0 }
   else
     let sym = str.concat([p.instrument, "/USD"]) in
     historical_var_of(p.value, price_rows, sym)

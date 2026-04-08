@@ -229,6 +229,83 @@ fn auth_error(reason) {
   { status: 403, headers: { "Content-Type": "application/json" }, body: str.concat(["{\"error\":\"", reason, "\"}"]) }
 }
 
+fn audit_export_h(req, ctx) {
+  let db = ctx.db in
+  let prefix = "/finance/audit/export/" in
+  let account = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
+  if account == "" then err_json_h(400, "missing account")
+  else
+    let now = current_ts(db) in
+    let prices = ctx.qasim_prices.price_rows_at(db, now, ctx.max_price_age) in
+    let all_prices = ctx.qasim_prices.all_price_rows(db) in
+    let inst_rows = instrument_rows(db) in
+    let ca_rows = corporate_action_rows(db) in
+    let raw_fills = fill_rows_for_account(db, account) in
+    let raw_cash = cash_rows_for_account(db, account) in
+    let fills = filter_verified_rows(raw_fills, ctx) in
+    let cash = filter_verified_rows(raw_cash, ctx) in
+    let fills_vs = verify_rows(raw_fills, ctx) in
+    let cash_vs = verify_rows(raw_cash, ctx) in
+    let verification_summary = { fills: fills_vs, cash: cash_vs, all_valid: fills_vs.all_valid && cash_vs.all_valid } in
+    let positions = ctx.qasim_state.positions_from_fills_with_actions(fills, prices, ctx.qasim_prices, inst_rows, ca_rows, now) in
+    let cash_balance = ctx.qasim_state.cash_balance_of(cash) in
+    let flows = cash_flow_rows(db, account) in
+    let private_summary = ctx.qasim_state.private_nav_summary(flows, 0.08, now) in
+    let futures_pos = list.filter(positions, fn(p) { p.asset_class == "future" }) in
+    let total_mtm_pnl = list.fold(futures_pos, 0.0, fn(acc, p) { if p.mtm_pnl == null then acc else acc + p.mtm_pnl }) in
+    let total_var_margin = list.fold(futures_pos, 0.0, fn(acc, p) { if p.variation_margin == null then acc else acc + p.variation_margin }) in
+    let total_init_margin = list.fold(futures_pos, 0.0, fn(acc, p) { if p.initial_margin == null then acc else acc + p.initial_margin }) in
+    let total_notional = list.fold(futures_pos, 0.0, fn(acc, p) { if p.notional == null then acc else acc + cast.float(p.notional) }) in
+    let fi_pos = list.filter(positions, fn(p) { p.asset_class == "fixed_income" }) in
+    let total_dv01 = list.fold(fi_pos, 0.0, fn(acc, p) { if p.ir_risk == null then acc else acc + p.ir_risk.dv01 }) in
+    let base_risk = ctx.qasim_state.risk_state_with_var(positions, cash_balance, all_prices) in
+    let risk_state = rec.set(rec.set(rec.set(rec.set(rec.set(rec.set(base_risk,
+      "private_nav", private_summary.nav),
+      "pv_capital_calls", private_summary.pv_capital_calls),
+      "total_mtm_pnl", total_mtm_pnl),
+      "total_initial_margin", total_init_margin),
+      "total_variation_margin", total_var_margin),
+      "total_dv01", total_dv01) in
+    let public_nav = ctx.qasim_state.nav_of(positions, cash_balance) in
+    let total_nav = public_nav + private_summary.nav + total_mtm_pnl in
+    let rules = compliance_rule_rows(db, account) in
+    let compliance = ctx.qasim_state.evaluate_compliance(rules, positions, risk_state, now) in
+    let attribution = ctx.qasim_state.attribution_of(fills, positions, public_nav) in
+    let scenario_names = ["equity_down_10", "market_crash_20", "sigma_2", "sigma_3", "sigma_4", "sigma_4_t", "gfc_2008", "covid_crash", "rates_shock", "bull_case"] in
+    let scenarios = list.map(scenario_names, fn(sname) {
+      let sc = ctx.qasim_scenarios.scenario_state_of(account, now, positions, { scenario_name: sname }, sname) in
+      { scenario: sname, pnl: sc.pnl, shocked_nav: sc.shocked_nav + cash_balance, summary: sc.summary, scenario_digest: sc.scenario_digest }
+    }) in
+    let chain_rows = sqlite.query(db, "SELECT chain_digest FROM receipt_log ORDER BY rowid DESC LIMIT 1") in
+    let chain_digest = if list.len(chain_rows) > 0 then chain_rows[0].chain_digest else "GENESIS" in
+    let vs_digest = hash.sha256_text(json.encode(verification_summary)) in
+    let bundle = {
+      account: account,
+      as_of_ts: now,
+      verified: verification_summary.all_valid,
+      verification_summary: verification_summary,
+      verification_digest: vs_digest,
+      positions: positions,
+      cash_balance: cash_balance,
+      public_nav: public_nav,
+      private_nav: private_summary,
+      futures: { count: list.len(futures_pos), total_notional: total_notional, total_mtm_pnl: total_mtm_pnl, total_variation_margin: total_var_margin, total_initial_margin: total_init_margin },
+      ir_risk: { fi_count: list.len(fi_pos), total_dv01: total_dv01 },
+      total_nav: total_nav,
+      risk_snapshot: risk_state,
+      compliance_report: { rule_count: list.len(rules), compliance: compliance },
+      attribution: attribution,
+      stress_scenarios: scenarios,
+      receipt_chain_digest: chain_digest,
+      fill_count: list.len(fills),
+      cash_count: list.len(cash),
+      price_count: list.len(prices)
+    } in
+    let audit_digest = hash.sha256_text(json.encode(bundle)) in
+    ok_json_h(rec.set(bundle, "audit_digest", audit_digest))
+}
+
+
 fn revoke_api_key_h(req, ctx) {
   let db = ctx.db in
   let auth = check_auth(req, db, ctx, "write") in
@@ -1419,6 +1496,7 @@ fn handle(req, ctx) {
   else if req.path == "/admin/api_keys" && req.method == "POST" then (if req.body == "" then err_json_h(400, "request body required") else create_api_key_h(req, ctx))
   else if req.path == "/admin/api_keys" && req.method == "GET" then list_api_keys_h(req, ctx)
   else if str.starts_with(req.path, "/admin/api_keys/") && req.method == "DELETE" then revoke_api_key_h(req, ctx)
+  else if str.starts_with(req.path, "/finance/audit/export/") then audit_export_h(req, ctx)
   else if req.path == "/finance/match" then
     (let _auth = check_auth(req, ctx.db, ctx, "match") in
     if !_auth.ok then auth_error(_auth.reason)
