@@ -210,6 +210,34 @@ Portfolio futures summary in /finance/position response:
   }
 
 MTM P&L is included in total_nav. Initial margin is tracked in risk_state.
+
+Fixed income positions carry IR risk fields:
+  ir_risk: {
+    macaulay_duration:  7.81,    -- time-weighted PV / price (years)
+    modified_duration:  7.63,    -- mac_dur / (1 + ytm/m)
+    convexity:          69.5,    -- second-order price sensitivity
+    dv01:              -524.21,  -- $ change per 1bp yield move (negative = long)
+    ytm:                0.0475,  -- yield to maturity
+    coupon_rate:        0.045,
+    face_value:         100,
+    clean_price:        98.10
+  }
+
+Portfolio IR summary in /finance/position response:
+  ir_risk: {
+    fi_count:              1,
+    total_dv01:           -524.21,   -- portfolio dollar duration
+    portfolio_mod_duration: 7.63    -- value-weighted modified duration
+  }
+
+Bond instrument registration (dedicated constructor):
+  { "instrument_id": "UST10Y", "asset_class": "fixed_income",
+    "symbol": "UST10Y", "currency": "USD", "venue": "OTC",
+    "multiplier": 1000, "expiry_ts_unix": 1778000000,
+    "coupon_rate": 0.045, "face_value": 100,
+    "coupon_frequency": 2, "ytm": 0.0475 }
+
+Discounting uses discrete semi-annual compounding: DF = (1 + ytm/m)^(-t*m)
 Unregistered instruments default to equity with multiplier 1.
 
 ### Recency-weighted consensus
