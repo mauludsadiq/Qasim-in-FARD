@@ -267,6 +267,143 @@ fn private_nav_h(req, ctx) {
     ok_json_h({ account: account, as_of_ts: now, private_nav: summary })
 }
 
+fn open_orders_for_instrument(db, instrument) {
+  sqlite.query(db, str.concat([
+    "SELECT order_id, account, instrument, side, qty, order_type, limit_price, ts_unix, filled_qty, status, issuer_pk_hex, sig_b64, payload_json FROM orders WHERE instrument='",
+    instrument, "' AND status='open' ORDER BY ts_unix ASC"
+  ]))
+}
+
+fn can_match(buy_order, sell_order) {
+  let buy_limit = if rec.has(buy_order, "limit_price") then buy_order.limit_price else null in
+  let sell_limit = if rec.has(sell_order, "limit_price") then sell_order.limit_price else null in
+  let buy_type = if rec.has(buy_order, "order_type") then buy_order.order_type else "limit" in
+  let sell_type = if rec.has(sell_order, "order_type") then sell_order.order_type else "limit" in
+  if buy_type == "market" || sell_type == "market" then true
+  else if buy_limit == null || sell_limit == null then false
+  else buy_limit >= sell_limit
+}
+
+fn match_price(buy_order, sell_order) {
+  let buy_type = if rec.has(buy_order, "order_type") then buy_order.order_type else "limit" in
+  let sell_type = if rec.has(sell_order, "order_type") then sell_order.order_type else "limit" in
+  let buy_limit = if rec.has(buy_order, "limit_price") then buy_order.limit_price else 0 in
+  let sell_limit = if rec.has(sell_order, "limit_price") then sell_order.limit_price else 0 in
+  if sell_type == "limit" then sell_limit
+  else if buy_type == "limit" then buy_limit
+  else (buy_limit + sell_limit) / 2
+}
+
+fn match_qty(buy_order, sell_order) {
+  let buy_remain = buy_order.qty - (if rec.has(buy_order, "filled_qty") then buy_order.filled_qty else 0) in
+  let sell_remain = sell_order.qty - (if rec.has(sell_order, "filled_qty") then sell_order.filled_qty else 0) in
+  if buy_remain < sell_remain then buy_remain else sell_remain
+}
+
+fn run_matching_h(req, ctx) {
+  let db = ctx.db in
+  let body = json.decode(req.body) in
+  let instrument = if rec.has(body, "instrument") then rec.get(body, "instrument") else "" in
+  let issuer_pk_hex = if rec.has(body, "issuer_pk_hex") then rec.get(body, "issuer_pk_hex") else "SYSTEM" in
+  let issuer_secret_hex = if rec.has(body, "issuer_secret_hex") then rec.get(body, "issuer_secret_hex") else "" in
+  if instrument == "" then err_json_h(400, "missing instrument")
+  else
+    let now = current_ts(db) in
+    let orders = open_orders_for_instrument(db, instrument) in
+    let buys = list.filter(orders, fn(o) { o.side == "buy" }) in
+    let sells = list.filter(orders, fn(o) { o.side == "sell" }) in
+    let result = list.fold(buys, { fills: [], updated_orders: [] }, fn(acc, buy) {
+      let buy_remain = buy.qty - (if rec.has(buy, "filled_qty") then buy.filled_qty else 0) in
+      if buy_remain <= 0 then acc
+      else
+        let match_result = list.fold(sells, { fills: acc.fills, buy_filled: 0, buy_done: false }, fn(sacc, sell) {
+          if sacc.buy_done then sacc
+          else
+            let sell_remain = sell.qty - (if rec.has(sell, "filled_qty") then sell.filled_qty else 0) in
+            if sell_remain <= 0 then sacc
+            else if !can_match(buy, sell) then sacc
+            else
+              let qty = if (buy_remain - sacc.buy_filled) < sell_remain then (buy_remain - sacc.buy_filled) else sell_remain in
+              if qty <= 0 then sacc
+              else
+                let price = match_price(buy, sell) in
+                let fill_id = str.concat(["FILL-", buy.order_id, "-", sell.order_id, "-", str.from(now)]) in
+                let buy_fill = {
+                  fill_id: str.concat([fill_id, "-B"]),
+                  order_id: buy.order_id,
+                  account: buy.account,
+                  instrument: instrument,
+                  side: "buy",
+                  qty: qty,
+                  price: price,
+                  ts_unix: now
+                } in
+                let sell_fill = {
+                  fill_id: str.concat([fill_id, "-S"]),
+                  order_id: sell.order_id,
+                  account: sell.account,
+                  instrument: instrument,
+                  side: "sell",
+                  qty: qty,
+                  price: price,
+                  ts_unix: now
+                } in
+                let buy_pj = json.canonicalize(buy_fill) in
+                let sell_pj = json.canonicalize(sell_fill) in
+                let buy_obj = ctx.qasim_objects.fill(buy_fill.fill_id, buy.order_id, buy.account, instrument, "buy", qty, price, now, issuer_pk_hex, "SYSTEM") in
+                let sell_obj = ctx.qasim_objects.fill(sell_fill.fill_id, sell.order_id, sell.account, instrument, "sell", qty, price, now, issuer_pk_hex, "SYSTEM") in
+                let _ = sqlite.exec(db, str.concat([
+                  "INSERT OR IGNORE INTO fills (digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+                  buy_obj.digest, "','", buy_fill.fill_id, "','", buy.order_id, "','", buy.account, "','",
+                  instrument, "','buy',", str.from(qty), ",", str.from(price), ",", str.from(now), ",'",
+                  issuer_pk_hex, "','SYSTEM','", buy_pj, "')"
+                ])) in
+                let _ = sqlite.exec(db, str.concat([
+                  "INSERT OR IGNORE INTO fills (digest,fill_id,order_id,account,instrument,side,qty,price,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+                  sell_obj.digest, "','", sell_fill.fill_id, "','", sell.order_id, "','", sell.account, "','",
+                  instrument, "','sell',", str.from(qty), ",", str.from(price), ",", str.from(now), ",'",
+                  issuer_pk_hex, "','SYSTEM','", sell_pj, "')"
+                ])) in
+                let _ = sqlite.exec(db, str.concat([
+                  "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+                  buy_obj.digest, "','fill','", buy.account, "','", instrument, "',", str.from(now), ",'", issuer_pk_hex, "','SYSTEM','", buy_pj, "')"
+                ])) in
+                let _ = sqlite.exec(db, str.concat([
+                  "INSERT OR IGNORE INTO object_store (digest,object_type,account,instrument,ts_unix,issuer_pk_hex,sig_b64,payload_json) VALUES ('",
+                  sell_obj.digest, "','fill','", sell.account, "','", instrument, "',", str.from(now), ",'", issuer_pk_hex, "','SYSTEM','", sell_pj, "')"
+                ])) in
+                let new_sell_filled = (if rec.has(sell, "filled_qty") then sell.filled_qty else 0) + qty in
+                let sell_status = if new_sell_filled >= sell.qty then "filled" else "partial" in
+                let _ = sqlite.exec(db, str.concat([
+                  "UPDATE orders SET filled_qty=", str.from(new_sell_filled), ", status='", sell_status, "' WHERE order_id='", sell.order_id, "'"
+                ])) in
+                { fills: list.append(list.append(sacc.fills, buy_fill), sell_fill), buy_filled: sacc.buy_filled + qty, buy_done: sacc.buy_filled + qty >= buy_remain }
+        }) in
+        let new_buy_filled = (if rec.has(buy, "filled_qty") then buy.filled_qty else 0) + match_result.buy_filled in
+        let buy_status = if new_buy_filled >= buy.qty then "filled" else if match_result.buy_filled > 0 then "partial" else "open" in
+        let _ = if match_result.buy_filled > 0 then sqlite.exec(db, str.concat([
+          "UPDATE orders SET filled_qty=", str.from(new_buy_filled), ", status='", buy_status, "' WHERE order_id='", buy.order_id, "'"
+        ])) else null in
+        { fills: match_result.fills, updated_orders: acc.updated_orders }
+    }) in
+    ok_json_h({ instrument: instrument, as_of_ts: now, fills_generated: list.len(result.fills), fills: result.fills })
+}
+
+fn orders_h(req, ctx) {
+  let db = ctx.db in
+  let prefix = "/finance/orders/" in
+  let instrument = str.url_decode(str.slice(req.path, str.len(prefix), str.len(req.path))) in
+  let orders = if instrument == "" then
+    sqlite.query(db, "SELECT order_id, account, instrument, side, qty, order_type, limit_price, ts_unix, filled_qty, status FROM orders ORDER BY ts_unix DESC LIMIT 100")
+  else
+    sqlite.query(db, str.concat([
+      "SELECT order_id, account, instrument, side, qty, order_type, limit_price, ts_unix, filled_qty, status FROM orders WHERE instrument='",
+      instrument, "' ORDER BY ts_unix DESC"
+    ])) in
+  ok_json_h({ orders: orders, count: list.len(orders) })
+}
+
+
 fn post_compliance_rule_h(req, ctx) {
   let db = ctx.db in
   let body = json.decode(req.body) in
@@ -815,17 +952,20 @@ fn post_order_h(req, ctx) {
   else if issuer_pk_hex == "" then err_json_h(400, "missing issuer_pk_hex")
   else if sig_b64 == "" then err_json_h(400, "missing sig_b64")
   else if !verify_payload_h(ctx, issuer_pk_hex, sig_b64, payload_json) then err_json_h(401, "bad sig")
-  else if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < (if rec.has(body, "ts_unix") then rec.get(body, "ts_unix") else 0) then err_json_h(400, "ts_unix is in the future")
   else
+    let pp = json.decode(payload_json) in
+    let ts_unix = if rec.has(pp, "ts_unix") then pp.ts_unix else 0 in
+    if (let now_rows = sqlite.query(db, "SELECT CAST(strftime('%s','now') AS INTEGER) AS ts") in now_rows[0].ts) < ts_unix then err_json_h(400, "ts_unix is in the future")
+    else
     let obj = ctx.qasim_objects.order(
-      (if rec.has(body, "order_id") then rec.get(body, "order_id") else ""),
-      (if rec.has(body, "account") then rec.get(body, "account") else ""),
-      (if rec.has(body, "instrument") then rec.get(body, "instrument") else ""),
-      (if rec.has(body, "side") then rec.get(body, "side") else ""),
-      (if rec.has(body, "qty") then rec.get(body, "qty") else 0),
-      (if rec.has(body, "order_type") then rec.get(body, "order_type") else ""),
-      (if rec.has(body, "limit_price") then rec.get(body, "limit_price") else 0),
-      (if rec.has(body, "ts_unix") then rec.get(body, "ts_unix") else 0),
+      (if rec.has(pp, "order_id") then pp.order_id else ""),
+      (if rec.has(pp, "account") then pp.account else ""),
+      (if rec.has(pp, "instrument") then pp.instrument else ""),
+      (if rec.has(pp, "side") then pp.side else ""),
+      (if rec.has(pp, "qty") then pp.qty else 0),
+      (if rec.has(pp, "order_type") then pp.order_type else ""),
+      (if rec.has(pp, "limit_price") then pp.limit_price else 0),
+      ts_unix,
       issuer_pk_hex, sig_b64
     ) in
     let _ = sqlite.exec(db, str.concat([
@@ -1101,6 +1241,8 @@ fn verify_chain_h(ctx) {
 
 fn handle(req, ctx) {
   if req.path == "/health" then health_h()
+  else if req.path == "/finance/match" then (if req.body == "" then err_json_h(400, "request body required") else run_matching_h(req, ctx))
+  else if str.starts_with(req.path, "/finance/orders/") then orders_h(req, ctx)
   else if req.path == "/finance/ingest/cash_flow" then (if req.body == "" then err_json_h(400, "request body required") else post_cash_flow_h(req, ctx))
   else if str.starts_with(req.path, "/finance/private/nav/") then private_nav_h(req, ctx)
   else if req.path == "/finance/ingest/compliance_rule" then (if req.body == "" then err_json_h(400, "request body required") else post_compliance_rule_h(req, ctx))

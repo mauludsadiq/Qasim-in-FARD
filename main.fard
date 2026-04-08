@@ -89,6 +89,8 @@ let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS orders (
   order_type TEXT NOT NULL,
   limit_price REAL,
   ts_unix INTEGER NOT NULL,
+  filled_qty REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'open',
   issuer_pk_hex TEXT NOT NULL,
   sig_b64 TEXT NOT NULL,
   payload_json TEXT NOT NULL
