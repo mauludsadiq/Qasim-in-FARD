@@ -149,6 +149,17 @@ curl http://0.0.0.0:9801/finance/position/ACCT-123
 ```
 
 Response includes `verified`, `verification_digest`, `positions` (all asset classes with Greeks/DV01/MTM), `public_nav`, `private_nav`, `total_nav`, `futures` summary, `ir_risk` summary, `risk_state` (6 VaR methods), and `state_digest`.
+> **Note on digests:** `/finance/position` is a live snapshot — `as_of_ts` is set to the current wall-clock time on every request, so `state_digest` changes each second even with identical underlying data. This is by design: every snapshot is uniquely time-anchored. For a reproducible digest, use the time-indexed endpoint:
+>
+> ```bash
+> # Capture a timestamp from a live position call
+> TS=$(curl -s http://0.0.0.0:9801/finance/position/ACCT-123 | python3 -c "import json,sys; print(json.load(sys.stdin)['as_of_ts'])")
+>
+> # These two calls will always return identical state_digest
+> curl -s http://0.0.0.0:9801/finance/state_at/ACCT-123/$TS
+> curl -s http://0.0.0.0:9801/finance/state_at/ACCT-123/$TS
+> ```
+
 
 ### 8. Check compliance
 
