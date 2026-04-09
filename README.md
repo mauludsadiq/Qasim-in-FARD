@@ -578,10 +578,10 @@ fardrun test --program tests/test_qasim_compliance.fard       # 21 tests
 fardrun test --program tests/test_qasim_risk.fard             # 11 tests
 fardrun test --program tests/test_qasim_private.fard          # 12 tests
 fardrun test --program tests/test_qasim_matching.fard         # 11 tests
-fardrun test --program tests/test_qasim_monte_carlo.fard      # 12 tests
+fardrun test --program tests/test_qasim_monte_carlo.fard      # 20 tests
 ```
 
-117 tests, all passing.
+135 tests, all passing.
 
 -----
 
